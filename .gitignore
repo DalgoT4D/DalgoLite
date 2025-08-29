@@ -1,0 +1,17 @@
+.DS_Store
+
+.env
+.env.example
+
+*.log
+*.md
+*.pdf
+*.db
+*.txt
+
+logs/
+frontend/node_modules/
+backend/__pycache__/
+backend/venv/
+frontend/.next/
+backend/.env
