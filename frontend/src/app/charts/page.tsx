@@ -380,6 +380,8 @@ export default function ChartsPage() {
       if (response.ok) {
         if (sheetId) {
           await fetchCharts()
+        } else if (projectId) {
+          await fetchProjectCharts()
         } else {
           await fetchAllSheetsWithCharts()
         }
