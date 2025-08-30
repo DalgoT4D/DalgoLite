@@ -16,7 +16,8 @@ import {
   ExternalLink,
   Sheet as SheetIcon,
   Trash2,
-  Settings
+  Settings,
+  Zap
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import Navigation from '@/components/Navigation'
@@ -55,6 +56,7 @@ export default function HomePage() {
   const [deleteConfirmSheet, setDeleteConfirmSheet] = useState<ConnectedSheet | null>(null)
   const [stats, setStats] = useState({
     totalSheets: 0,
+    totalProjects: 0,
     totalCharts: 0,
     totalDataRows: 0,
     lastSync: null as string | null
@@ -81,9 +83,20 @@ export default function HomePage() {
       setProjects(projectsData.projects)
       
       // Calculate stats
-      const totalCharts = await Promise.all(
+      const sheetCharts = await Promise.all(
         sheetsData.sheets.map(async (sheet: ConnectedSheet) => {
           const chartsResponse = await fetch(`http://localhost:8000/sheets/${sheet.id}/charts`)
+          if (chartsResponse.ok) {
+            const chartsData = await chartsResponse.json()
+            return chartsData.charts.length
+          }
+          return 0
+        })
+      )
+
+      const projectCharts = await Promise.all(
+        projectsData.projects.map(async (project: any) => {
+          const chartsResponse = await fetch(`http://localhost:8000/projects/${project.id}/charts`)
           if (chartsResponse.ok) {
             const chartsData = await chartsResponse.json()
             return chartsData.charts.length
@@ -94,7 +107,8 @@ export default function HomePage() {
       
       setStats({
         totalSheets: sheetsData.sheets.length,
-        totalCharts: totalCharts.reduce((sum, count) => sum + count, 0),
+        totalProjects: projectsData.projects.length,
+        totalCharts: sheetCharts.reduce((sum, count) => sum + count, 0) + projectCharts.reduce((sum, count) => sum + count, 0),
         totalDataRows: sheetsData.sheets.reduce((sum: number, sheet: ConnectedSheet) => sum + sheet.total_rows, 0),
         lastSync: sheetsData.sheets.length > 0 ? sheetsData.sheets[0].last_synced : null
       })
@@ -236,7 +250,7 @@ export default function HomePage() {
         </div>
 
         {/* Stats Overview */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 mb-12">
           <div className="bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-xl shadow-lg p-8 transform hover:scale-105 transition-all duration-200">
             <div className="flex items-center justify-between">
               <div>
@@ -245,6 +259,18 @@ export default function HomePage() {
               </div>
               <div className="bg-white/20 rounded-full p-4">
                 <Database className="text-white" size={32} />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-gradient-to-br from-orange-500 to-orange-600 text-white rounded-xl shadow-lg p-8 transform hover:scale-105 transition-all duration-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-3xl font-bold mb-2">{stats.totalProjects}</p>
+                <p className="text-orange-100 text-lg">Transform Projects</p>
+              </div>
+              <div className="bg-white/20 rounded-full p-4">
+                <Zap className="text-white" size={32} />
               </div>
             </div>
           </div>
@@ -365,6 +391,14 @@ export default function HomePage() {
                               </div>
 
                               <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => handleRefreshSheet(sheet)}
+                                  disabled={isRefreshing}
+                                  className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-3 py-1 rounded text-sm font-medium transition-colors flex items-center gap-1"
+                                >
+                                  <RefreshCw size={12} className={isRefreshing ? 'animate-spin' : ''} />
+                                  Sync
+                                </button>
                                 <button
                                   onClick={() => router.push(`/sheets/${sheet.id}`)}
                                   className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm font-medium transition-colors"

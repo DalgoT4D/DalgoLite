@@ -97,6 +97,23 @@ class DataTransformation(Base):
     project = relationship("TransformationProject")
     sheet = relationship("ConnectedSheet")
 
+class PipelineExecutionHistory(Base):
+    __tablename__ = "pipeline_execution_history"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("transformation_projects.id"), nullable=False)
+    status = Column(String, nullable=False)  # running, completed, failed
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    completed_at = Column(DateTime, nullable=True)
+    error_message = Column(String, nullable=True)
+    sheets_synced = Column(Integer, default=0)
+    total_sheets = Column(Integer, default=0)
+    rows_processed = Column(Integer, nullable=True)
+    duration_seconds = Column(Integer, nullable=True)
+    
+    # Relationships
+    project = relationship("TransformationProject")
+
 # Database migration utilities
 def migrate_database():
     """Handle database schema migrations safely"""

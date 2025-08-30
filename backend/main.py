@@ -13,7 +13,7 @@ from googleapiclient.discovery import build
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from database import create_tables, get_db, SheetRepository, ChartRepository, TransformationProjectRepository, ConnectedSheet, SavedChart, TransformationProject, TransformedDataWarehouse, engine
+from database import create_tables, get_db, SheetRepository, ChartRepository, TransformationProjectRepository, ConnectedSheet, SavedChart, TransformationProject, TransformedDataWarehouse, PipelineExecutionHistory, engine
 from pydantic import BaseModel
 import hashlib
 import asyncio
@@ -741,21 +741,35 @@ async def get_sheet_charts(sheet_id: int, db: Session = Depends(get_db)):
         chart_repo = ChartRepository(db)
         charts = chart_repo.get_charts_by_sheet(sheet_id)
         
-        return {
-            "charts": [
-                {
+        chart_list = []
+        for chart in charts:
+            try:
+                # Handle chart_config parsing safely
+                if isinstance(chart.chart_config, str):
+                    try:
+                        chart_config = json.loads(chart.chart_config)
+                    except json.JSONDecodeError:
+                        chart_config = {}
+                elif isinstance(chart.chart_config, dict):
+                    chart_config = chart.chart_config
+                else:
+                    chart_config = {}
+                
+                chart_list.append({
                     "id": chart.id,
                     "chart_name": chart.chart_name,
                     "chart_type": chart.chart_type,
                     "x_axis_column": chart.x_axis_column,
                     "y_axis_column": chart.y_axis_column,
-                    "chart_config": chart.chart_config,
+                    "chart_config": chart_config,
                     "created_at": chart.created_at.isoformat(),
                     "updated_at": chart.updated_at.isoformat()
-                }
-                for chart in charts
-            ]
-        }
+                })
+            except Exception as chart_error:
+                print(f"Error processing chart {chart.id}: {chart_error}")
+                continue
+        
+        return {"charts": chart_list}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1395,9 +1409,57 @@ async def update_project(project_id: int, update_request: ProjectUpdateRequest, 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.delete("/projects/{project_id}")
+async def delete_project(project_id: int, db: Session = Depends(get_db)):
+    """Delete a transformation project and all associated data"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        project_repo = TransformationProjectRepository(db)
+        project = project_repo.get_project_by_id(project_id)
+        
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Delete project charts (cascade handled by database relationship)
+        chart_repo = ChartRepository(db)
+        project_charts = db.query(SavedChart).filter(SavedChart.project_id == project_id).all()
+        for chart in project_charts:
+            chart_repo.delete_chart(chart.id)
+        
+        # Delete warehouse data if exists
+        if project.warehouse_table_name:
+            try:
+                warehouse_repo = db.query(TransformedDataWarehouse).filter(
+                    TransformedDataWarehouse.project_id == project_id
+                ).first()
+                if warehouse_repo:
+                    db.delete(warehouse_repo)
+            except Exception as e:
+                print(f"Warning: Failed to clean up warehouse entry: {e}")
+        
+        # Delete the project itself
+        success = project_repo.delete_project(project_id)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to delete project")
+        
+        return {"message": "Project and all associated data deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Pipeline orchestration functions
 async def execute_transformation_pipeline(project_id: int, db: Session):
     """Execute the transformation pipeline for a project"""
+    from datetime import datetime, timezone
+    
+    start_time = datetime.now(timezone.utc)
+    history_entry = None
+    
     try:
         project_repo = TransformationProjectRepository(db)
         project = project_repo.get_project_by_id(project_id)
@@ -1405,34 +1467,187 @@ async def execute_transformation_pipeline(project_id: int, db: Session):
         if not project:
             return
         
+        # Create history entry
+        history_entry = PipelineExecutionHistory(
+            project_id=project_id,
+            status='running',
+            started_at=start_time,
+            total_sheets=len(project.sheet_ids)
+        )
+        db.add(history_entry)
+        db.commit()
+        db.refresh(history_entry)
+        
         # Update pipeline status to running
         project_repo.update_project(project_id, pipeline_status='running')
         
-        # Get sheets data and apply transformations
+        # Step 1: Sync all source sheets first
         sheet_repo = SheetRepository(db)
+        sync_result = await sync_project_source_sheets(project, sheet_repo)
+        
+        # Update history with sync results
+        history_entry.sheets_synced = sync_result.get('synced_count', 0)
+        db.commit()
+        
+        if not sync_result.get('success', False):
+            # Update history entry with failure
+            history_entry.status = 'failed'
+            history_entry.completed_at = datetime.now(timezone.utc)
+            history_entry.duration_seconds = int((history_entry.completed_at - start_time).total_seconds())
+            history_entry.error_message = 'Failed to sync source sheets'
+            db.commit()
+            
+            project_repo.update_project(project_id, pipeline_status='failed')
+            return
+        
+        # Step 2: Get fresh sheets data and apply transformations
         transformed_data = await process_transformation(project, sheet_repo)
         
         if transformed_data is not None:
-            # Store in warehouse
+            # Step 3: Store in warehouse
             warehouse_table_name = f"transformed_project_{project_id}"
             store_in_warehouse(transformed_data, warehouse_table_name, project_id, db)
             
+            # Update history entry with success
+            end_time = datetime.now(timezone.utc)
+            history_entry.status = 'completed'
+            history_entry.completed_at = end_time
+            history_entry.duration_seconds = int((end_time - start_time).total_seconds())
+            history_entry.rows_processed = len(transformed_data)
+            db.commit()
+            
             # Update project with warehouse table name and completion status
-            from datetime import datetime
             project_repo.update_project(
                 project_id, 
                 warehouse_table_name=warehouse_table_name,
                 pipeline_status='completed',
-                last_pipeline_run=datetime.now()
+                last_pipeline_run=start_time
             )
         else:
+            # Update history entry with failure
+            end_time = datetime.now(timezone.utc)
+            history_entry.status = 'failed'
+            history_entry.completed_at = end_time
+            history_entry.duration_seconds = int((end_time - start_time).total_seconds())
+            history_entry.error_message = 'Transformation processing failed'
+            db.commit()
+            
             project_repo.update_project(project_id, pipeline_status='failed')
             
     except Exception as e:
         # Update pipeline status to failed
         project_repo = TransformationProjectRepository(db)
         project_repo.update_project(project_id, pipeline_status='failed')
+        
+        # Update history entry with exception details
+        if history_entry:
+            end_time = datetime.now(timezone.utc)
+            history_entry.status = 'failed'
+            history_entry.completed_at = end_time
+            history_entry.duration_seconds = int((end_time - start_time).total_seconds())
+            history_entry.error_message = str(e)[:500]  # Limit error message length
+            db.commit()
+        
         print(f"Pipeline execution failed for project {project_id}: {e}")
+
+async def sync_project_source_sheets(project: TransformationProject, sheet_repo: SheetRepository):
+    """Sync all source sheets for a transformation project"""
+    try:
+        # Check authentication
+        if 'default' not in user_credentials:
+            print(f"Not authenticated with Google for project {project.id}")
+            return False
+        
+        # Build the service with stored credentials
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+        
+        creds = Credentials(**user_credentials['default'])
+        service = build('sheets', 'v4', credentials=creds)
+        
+        synced_count = 0
+        total_sheets = len(project.sheet_ids)
+        
+        for sheet_id in project.sheet_ids:
+            try:
+                existing_sheet = sheet_repo.get_sheet_by_id(sheet_id)
+                
+                if not existing_sheet:
+                    print(f"Sheet {sheet_id} not found for project {project.id}")
+                    continue
+                
+                # Get fresh data from Google Sheets using the same logic as resync
+                sheet = service.spreadsheets()
+                
+                range_attempts = [
+                    f"{existing_sheet.sheet_name}!A:Z",  # Try with known sheet name
+                    'A:Z',       # Without sheet name
+                    'A1:Z1000',  # Specific range
+                ]
+                
+                result = None
+                successful_range = None
+                
+                for attempt_range in range_attempts:
+                    try:
+                        result = sheet.values().get(spreadsheetId=existing_sheet.spreadsheet_id, range=attempt_range).execute()
+                        successful_range = attempt_range
+                        break
+                    except Exception as range_error:
+                        continue
+                
+                if result is None:
+                    print(f"Unable to sync sheet {sheet_id} for project {project.id}")
+                    continue
+                
+                values = result.get('values', [])
+                
+                if not values:
+                    print(f"No data found in sheet {sheet_id} for project {project.id}")
+                    continue
+                
+                # Update the existing sheet with fresh data
+                columns = values[0] if values else []
+                sample_data = values[:10]  # Store first 10 rows
+                
+                updated_sheet = sheet_repo.create_or_update_sheet(
+                    spreadsheet_id=existing_sheet.spreadsheet_id,
+                    spreadsheet_url=existing_sheet.spreadsheet_url,
+                    title=existing_sheet.title,
+                    sheet_name=existing_sheet.sheet_name,
+                    columns=columns,
+                    sample_data=sample_data,
+                    total_rows=len(values)
+                )
+                
+                synced_count += 1
+                print(f"Successfully synced sheet {sheet_id} for project {project.id}")
+                
+            except Exception as sheet_error:
+                print(f"Failed to sync sheet {sheet_id} for project {project.id}: {sheet_error}")
+                continue
+        
+        # Return success if at least some sheets were synced
+        success_rate = synced_count / total_sheets if total_sheets > 0 else 0
+        print(f"Synced {synced_count}/{total_sheets} sheets for project {project.id} (success rate: {success_rate:.1%})")
+        
+        # Consider it successful if we synced at least 50% of sheets
+        return {
+            'success': success_rate >= 0.5,
+            'synced_count': synced_count,
+            'total_sheets': total_sheets,
+            'success_rate': success_rate
+        }
+        
+    except Exception as e:
+        print(f"Error syncing source sheets for project {project.id}: {e}")
+        return {
+            'success': False,
+            'synced_count': 0,
+            'total_sheets': len(project.sheet_ids) if project else 0,
+            'success_rate': 0.0,
+            'error': str(e)
+        }
 
 async def process_transformation(project: TransformationProject, sheet_repo: SheetRepository):
     """Process data transformation based on project configuration"""
@@ -1658,6 +1873,50 @@ async def get_project_data(project_id: int, db: Session = Depends(get_db)):
                 "columns": [],
                 "pipeline_status": project.pipeline_status or 'failed'
             }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/projects/{project_id}/history")
+async def get_project_pipeline_history(project_id: int, limit: int = 20, db: Session = Depends(get_db)):
+    """Get pipeline execution history for a project"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        project_repo = TransformationProjectRepository(db)
+        project = project_repo.get_project_by_id(project_id)
+        
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Get pipeline execution history
+        history_entries = db.query(PipelineExecutionHistory).filter(
+            PipelineExecutionHistory.project_id == project_id
+        ).order_by(PipelineExecutionHistory.started_at.desc()).limit(limit).all()
+        
+        # Format history entries
+        formatted_history = []
+        for entry in history_entries:
+            formatted_entry = {
+                "id": entry.id,
+                "status": entry.status,
+                "started_at": entry.started_at.isoformat() + 'Z',
+                "completed_at": entry.completed_at.isoformat() + 'Z' if entry.completed_at else None,
+                "duration_seconds": entry.duration_seconds,
+                "sheets_synced": entry.sheets_synced,
+                "total_sheets": entry.total_sheets,
+                "rows_processed": entry.rows_processed,
+                "error_message": entry.error_message
+            }
+            formatted_history.append(formatted_entry)
+        
+        return {
+            "history": formatted_history,
+            "total_executions": len(formatted_history)
+        }
         
     except HTTPException:
         raise

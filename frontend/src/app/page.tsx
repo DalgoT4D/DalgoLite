@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { SheetIcon, BarChart3, TrendingUp, Link, Users, Heart, Target, CheckCircle, ArrowRight } from 'lucide-react'
+import { SheetIcon, BarChart3, TrendingUp, Link, Users, Heart, Target, CheckCircle, ArrowRight, Database, Zap, GitMerge, Layers, Settings } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import Logo from '@/components/Logo'
 import GoogleSignInButton from '@/components/GoogleSignInButton'
@@ -87,8 +87,8 @@ export default function LandingPage() {
             </h1>
             
             <p className="text-xl md:text-2xl text-gray-600 mb-8 max-w-3xl mx-auto leading-relaxed">
-              Empower your NGO with intelligent data visualization. Connect Google Sheets, 
-              get AI-powered chart recommendations, and create beautiful dashboards in minutes.
+              Empower your NGO with intelligent data visualization and transformation. Connect Google Sheets, 
+              merge multiple datasets, and create beautiful automated dashboards with AI-powered insights.
             </p>
 
             {/* Connection Status */}
@@ -147,7 +147,7 @@ export default function LandingPage() {
               Built for Impact-Driven Organizations
             </h2>
             <p className="text-xl text-gray-600 max-w-3xl mx-auto">
-              Everything you need to turn your mission data into compelling visual stories.
+              Everything you need to turn your mission data into compelling visual stories and automated insights.
             </p>
           </div>
 
@@ -172,14 +172,85 @@ export default function LandingPage() {
               </p>
             </div>
 
-            <div className="text-center p-8 bg-purple-50 rounded-2xl">
-              <div className="bg-purple-600 text-white rounded-full p-4 w-16 h-16 mx-auto mb-6">
-                <Heart size={32} />
+            <div className="text-center p-8 bg-orange-50 rounded-2xl">
+              <div className="bg-orange-600 text-white rounded-full p-4 w-16 h-16 mx-auto mb-6">
+                <Zap size={32} />
               </div>
-              <h3 className="text-xl font-semibold text-gray-900 mb-3">Mission-Focused</h3>
+              <h3 className="text-xl font-semibold text-gray-900 mb-3">Data Transformation</h3>
               <p className="text-gray-600">
-                Designed specifically for NGOs and nonprofits to showcase impact, track progress, and tell data stories.
+                Merge multiple sheets, create automated pipelines, and transform raw data into insights with simple to expert modes.
               </p>
+            </div>
+          </div>
+
+          {/* New Data Transformation Section */}
+          <div className="bg-gradient-to-br from-green-50 to-emerald-100 rounded-3xl p-8 md:p-12 mb-16">
+            <div className="text-center mb-12">
+              <div className="bg-green-600 text-white rounded-full p-4 w-20 h-20 mx-auto mb-6">
+                <Database size={40} />
+              </div>
+              <h3 className="text-2xl md:text-3xl font-bold text-gray-900 mb-4">
+                Powerful Data Transformation
+              </h3>
+              <p className="text-lg text-gray-600 max-w-2xl mx-auto mb-8">
+                Transform your approach to data analysis with our intelligent pipeline system designed for every skill level.
+              </p>
+            </div>
+
+            <div className="grid md:grid-cols-3 gap-6">
+              <div className="bg-white rounded-xl p-6 shadow-sm border border-green-200">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="bg-green-100 rounded-lg p-2">
+                    <Layers size={20} className="text-green-600" />
+                  </div>
+                  <h4 className="font-semibold text-gray-900">Simple Mode</h4>
+                </div>
+                <p className="text-gray-600 mb-4">Perfect for beginners. Drag-and-drop interface to combine sheets, with guided suggestions for common transformations.</p>
+                <div className="text-sm text-green-700 bg-green-50 px-3 py-1 rounded-full inline-block">
+                  No technical skills required
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl p-6 shadow-sm border border-orange-200">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="bg-orange-100 rounded-lg p-2">
+                    <GitMerge size={20} className="text-orange-600" />
+                  </div>
+                  <h4 className="font-semibold text-gray-900">Advanced Mode</h4>
+                </div>
+                <p className="text-gray-600 mb-4">For power users. Advanced filtering, custom calculations, and complex data joins with visual pipeline builder.</p>
+                <div className="text-sm text-orange-700 bg-orange-50 px-3 py-1 rounded-full inline-block">
+                  Visual pipeline designer
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl p-6 shadow-sm border border-purple-200">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="bg-purple-100 rounded-lg p-2">
+                    <Settings size={20} className="text-purple-600" />
+                  </div>
+                  <h4 className="font-semibold text-gray-900">Expert Mode</h4>
+                </div>
+                <p className="text-gray-600 mb-4">Full control with custom SQL-like queries, scheduled automation, and enterprise-grade data warehousing.</p>
+                <div className="text-sm text-purple-700 bg-purple-50 px-3 py-1 rounded-full inline-block">
+                  Code-based transformations
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-8 bg-white/60 backdrop-blur-sm rounded-xl p-6 border border-green-200">
+              <div className="flex items-start gap-4">
+                <div className="bg-green-600 text-white rounded-full p-2">
+                  <TrendingUp size={20} />
+                </div>
+                <div>
+                  <h4 className="font-semibold text-gray-900 mb-2">Automated Pipeline Intelligence</h4>
+                  <p className="text-gray-600">
+                    Set up once, run automatically. Your transformed data stays fresh with scheduled updates, 
+                    and charts automatically reflect the latest insights from your source sheets.
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -194,7 +265,7 @@ export default function LandingPage() {
               </p>
             </div>
 
-            <div className="grid md:grid-cols-2 gap-8">
+            <div className="grid md:grid-cols-3 gap-6">
               <div className="bg-white p-6 rounded-xl shadow-sm">
                 <div className="flex items-start gap-4 mb-4">
                   <div className="bg-blue-100 rounded-full p-3">
@@ -224,6 +295,22 @@ export default function LandingPage() {
                 <p className="text-gray-700">
                   "The real-time sync with our Google Sheets means our dashboard always shows current 
                   vaccination rates and health metrics. It's transformed how we report to stakeholders."
+                </p>
+              </div>
+
+              <div className="bg-white p-6 rounded-xl shadow-sm">
+                <div className="flex items-start gap-4 mb-4">
+                  <div className="bg-orange-100 rounded-full p-3">
+                    <Database size={24} className="text-orange-600" />
+                  </div>
+                  <div>
+                    <h4 className="font-semibold text-gray-900 mb-1">Multi-Region Program</h4>
+                    <p className="text-sm text-gray-600">International Development NGO</p>
+                  </div>
+                </div>
+                <p className="text-gray-700">
+                  "The transformation pipeline automatically merges data from 12 regional offices. 
+                  What used to take days of manual work now updates automatically every morning."
                 </p>
               </div>
             </div>

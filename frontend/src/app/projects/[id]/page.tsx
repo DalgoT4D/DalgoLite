@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Database, RefreshCw, ExternalLink, BarChart3, Plus, Eye, Settings, Users, Zap, CheckCircle, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Database, RefreshCw, ExternalLink, BarChart3, Plus, Eye, Settings, Users, Zap, CheckCircle, AlertCircle, Edit3, History, Clock } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import Navigation from '@/components/Navigation'
 
@@ -49,6 +49,18 @@ interface JoinPreview {
   }
 }
 
+interface PipelineHistoryEntry {
+  id: number
+  status: string
+  started_at: string
+  completed_at: string | null
+  duration_seconds: number | null
+  sheets_synced: number
+  total_sheets: number
+  rows_processed: number | null
+  error_message: string | null
+}
+
 export default function ProjectDetailsPage({ params }: { params: { id: string } }) {
   const { isAuthenticated, logout } = useAuth()
   const router = useRouter()
@@ -58,6 +70,10 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
   const [joinPreview, setJoinPreview] = useState<JoinPreview | null>(null)
   const [loading, setLoading] = useState(true)
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [editingName, setEditingName] = useState(false)
+  const [pipelineHistory, setPipelineHistory] = useState<PipelineHistoryEntry[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [newName, setNewName] = useState('')
   const [selectedJoinColumn, setSelectedJoinColumn] = useState<string>('')
   const [advancedConfig, setAdvancedConfig] = useState({
     joinType: 'inner',
@@ -80,6 +96,12 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
     }
     fetchProjectData()
   }, [isAuthenticated, router])
+
+  useEffect(() => {
+    if (project) {
+      fetchPipelineHistory()
+    }
+  }, [project])
 
   const fetchProjectData = async () => {
     try {
@@ -112,6 +134,23 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
       console.error('Error fetching project data:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const fetchPipelineHistory = async () => {
+    if (!project) return
+    
+    setHistoryLoading(true)
+    try {
+      const response = await fetch(`http://localhost:8000/projects/${project.id}/history?limit=10`)
+      if (response.ok) {
+        const data = await response.json()
+        setPipelineHistory(data.history)
+      }
+    } catch (error) {
+      console.error('Error fetching pipeline history:', error)
+    } finally {
+      setHistoryLoading(false)
     }
   }
 
@@ -310,8 +349,9 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
               if (updatedProject.pipeline_status !== 'running') {
                 clearInterval(pollStatus)
                 setExecutingPipeline(false)
-                // Refresh chart data
+                // Refresh chart data and pipeline history
                 fetchProjectData()
+                fetchPipelineHistory()
               }
             }
           } catch (error) {
@@ -365,8 +405,112 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
     }
   }
 
+  const handleDeleteProject = async () => {
+    if (!project) return
+    
+    const confirmDelete = confirm(
+      `Are you sure you want to delete "${project.name}"?\n\nThis will permanently delete:\n• The transformation project\n• All associated charts\n• Warehouse data\n\nThis action cannot be undone.`
+    )
+    
+    if (!confirmDelete) return
+    
+    try {
+      const response = await fetch(`http://localhost:8000/projects/${project.id}`, {
+        method: 'DELETE'
+      })
+      
+      if (response.ok) {
+        alert('Project deleted successfully!')
+        router.push('/home')
+      } else {
+        const errorData = await response.json()
+        alert(`Failed to delete project: ${errorData.detail}`)
+      }
+    } catch (error) {
+      console.error('Error deleting project:', error)
+      alert('Failed to delete project. Please try again.')
+    }
+  }
+
+  const handleRenameProject = async () => {
+    if (!project || !newName.trim()) return
+    
+    try {
+      const response = await fetch(`http://localhost:8000/projects/${project.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName.trim() })
+      })
+      
+      if (response.ok) {
+        const updatedProject = await response.json()
+        setProject(updatedProject)
+        setEditingName(false)
+        setNewName('')
+      } else {
+        const errorData = await response.json()
+        alert(`Failed to rename project: ${errorData.detail}`)
+      }
+    } catch (error) {
+      console.error('Error renaming project:', error)
+      alert('Failed to rename project. Please try again.')
+    }
+  }
+
+  const handleStartEditing = () => {
+    if (project) {
+      setNewName(project.name)
+      setEditingName(true)
+    }
+  }
+
+  const handleCancelEditing = () => {
+    setEditingName(false)
+    setNewName('')
+  }
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString()
+  }
+
+  const getNextRunTime = (frequency: string, lastRun?: string) => {
+    if (!frequency) return null
+    
+    const now = new Date()
+    const lastRunDate = lastRun ? new Date(lastRun) : now
+    
+    let nextRun = new Date(lastRunDate)
+    
+    switch (frequency) {
+      case 'hourly':
+        nextRun.setHours(nextRun.getHours() + 1)
+        break
+      case 'daily':
+        nextRun.setDate(nextRun.getDate() + 1)
+        nextRun.setHours(6, 0, 0, 0) // 6 AM
+        break
+      case 'weekly':
+        nextRun.setDate(nextRun.getDate() + (7 - nextRun.getDay() + 1) % 7 || 7)
+        nextRun.setHours(6, 0, 0, 0)
+        break
+      case 'monthly':
+        if (nextRun.getMonth() === 11) {
+          nextRun.setFullYear(nextRun.getFullYear() + 1, 0, 1)
+        } else {
+          nextRun.setMonth(nextRun.getMonth() + 1, 1)
+        }
+        nextRun.setHours(6, 0, 0, 0)
+        break
+      default:
+        return null
+    }
+    
+    // If calculated time is in the past, add one more interval
+    if (nextRun <= now) {
+      return getNextRunTime(frequency, nextRun.toISOString())
+    }
+    
+    return nextRun.toLocaleString()
   }
 
   if (loading) {
@@ -414,7 +558,45 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
                   <Database size={24} />
                 </div>
                 <div>
-                  <h1 className="text-3xl font-bold text-gray-900">{project.name}</h1>
+                  <div className="flex items-center gap-2">
+                    {editingName ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={newName}
+                          onChange={(e) => setNewName(e.target.value)}
+                          className="text-3xl font-bold text-gray-900 bg-transparent border-b-2 border-green-600 focus:outline-none"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleRenameProject()
+                            if (e.key === 'Escape') handleCancelEditing()
+                          }}
+                          autoFocus
+                        />
+                        <button
+                          onClick={handleRenameProject}
+                          className="text-green-600 hover:text-green-700 p-1"
+                        >
+                          <CheckCircle size={20} />
+                        </button>
+                        <button
+                          onClick={handleCancelEditing}
+                          className="text-gray-400 hover:text-gray-600 p-1"
+                        >
+                          <AlertCircle size={20} />
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <h1 className="text-3xl font-bold text-gray-900">{project.name}</h1>
+                        <button
+                          onClick={handleStartEditing}
+                          className="text-gray-400 hover:text-green-600 p-1"
+                        >
+                          <Edit3 size={20} />
+                        </button>
+                      </>
+                    )}
+                  </div>
                   <p className="text-gray-600">Transformation Project</p>
                 </div>
               </div>
@@ -436,6 +618,13 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
                   </button>
                 ))}
               </div>
+              <button
+                onClick={handleDeleteProject}
+                className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+              >
+                <AlertCircle size={16} />
+                Delete Project
+              </button>
             </div>
           </div>
         </div>
@@ -484,12 +673,12 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
                         Transformed data ready • Last sync: {project.last_pipeline_run ? formatDate(project.last_pipeline_run) : 'Unknown'}
                         {project.schedule_config?.enabled && (
                           <span className="ml-2 inline-flex items-center">
-                            • Next sync: {project.schedule_config.frequency}
+                            • Next sync: {project.schedule_config.frequency} ({getNextRunTime(project.schedule_config.frequency, project.last_pipeline_run)})
                           </span>
                         )}
                       </>
                     )}
-                    {project.pipeline_status === 'running' && 'Processing your transformation configuration...'}
+                    {project.pipeline_status === 'running' && 'Syncing source sheets and applying transformations...'}
                     {project.pipeline_status === 'draft' && 'Configure your transformations below and save to execute pipeline'}
                     {project.pipeline_status === 'failed' && 'Pipeline encountered an error. Try manual sync or check configuration.'}
                   </p>
@@ -975,7 +1164,7 @@ ORDER BY sheet_1.created_at DESC`}
                               project.pipeline_status === 'failed' ? 'text-red-600' : 'text-gray-600'
                             }`}>
                               {project.pipeline_status === 'completed' ? '✓ Data Ready in Warehouse' :
-                               project.pipeline_status === 'running' ? '⟳ Transforming Data...' :
+                               project.pipeline_status === 'running' ? '⟳ Syncing & Transforming Data...' :
                                project.pipeline_status === 'failed' ? '✗ Pipeline Failed' : '○ Configuration Draft'}
                             </div>
                           </div>
@@ -992,9 +1181,9 @@ ORDER BY sheet_1.created_at DESC`}
                             <div className="text-xs font-medium text-gray-700 mb-2">Pipeline Steps</div>
                             <div className="space-y-2">
                               {[
-                                { step: 'Fetch Source Data', status: 'completed' },
-                                { step: 'Apply Transformations', status: project.pipeline_status === 'running' ? 'running' : 'completed' },
-                                { step: 'Store in Warehouse', status: project.pipeline_status === 'completed' ? 'completed' : project.pipeline_status },
+                                { step: 'Sync Source Sheets', status: project.pipeline_status === 'running' ? 'running' : project.pipeline_status === 'completed' ? 'completed' : 'pending' },
+                                { step: 'Apply Transformations', status: project.pipeline_status === 'running' ? 'running' : project.pipeline_status === 'completed' ? 'completed' : 'pending' },
+                                { step: 'Store in Warehouse', status: project.pipeline_status === 'completed' ? 'completed' : 'pending' },
                                 { step: 'Update Charts', status: project.pipeline_status === 'completed' ? 'completed' : 'pending' }
                               ].map((step, idx) => (
                                 <div key={idx} className="flex items-center gap-2 text-xs">
@@ -1041,6 +1230,8 @@ ORDER BY sheet_1.created_at DESC`}
                         {project.schedule_config?.enabled ? (
                           <span className="text-green-600 font-medium">
                             ✓ Auto-sync active: {project.schedule_config.frequency}
+                            <br />
+                            Next run: {getNextRunTime(project.schedule_config.frequency, project.last_pipeline_run)}
                           </span>
                         ) : (
                           'Automatically sync when source data changes'
@@ -1174,6 +1365,115 @@ ORDER BY sheet_1.created_at DESC`}
                 </div>
               </div>
             )}
+
+            {/* Pipeline History Section */}
+            <div className="bg-white rounded-xl shadow-sm border p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <History className="text-blue-600" size={24} />
+                  <h2 className="text-lg font-semibold text-gray-900">Pipeline Sync History</h2>
+                  {historyLoading && (
+                    <RefreshCw size={14} className="animate-spin text-blue-600" />
+                  )}
+                </div>
+                <button
+                  onClick={fetchPipelineHistory}
+                  className="bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 py-1 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Refresh
+                </button>
+              </div>
+
+              {pipelineHistory.length === 0 ? (
+                <div className="text-center py-8">
+                  <Clock className="mx-auto text-gray-400 mb-4" size={48} />
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">No pipeline runs yet</h3>
+                  <p className="text-gray-600">
+                    Pipeline execution history will appear here once you save and run transformations.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {pipelineHistory.map((entry) => {
+                    const formatDuration = (seconds: number | null) => {
+                      if (!seconds) return 'N/A'
+                      if (seconds < 60) return `${seconds}s`
+                      return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+                    }
+
+                    const formatDate = (dateStr: string) => {
+                      return new Date(dateStr).toLocaleString()
+                    }
+
+                    return (
+                      <div
+                        key={entry.id}
+                        className={`border rounded-lg p-4 ${
+                          entry.status === 'completed' ? 'border-green-200 bg-green-50' :
+                          entry.status === 'running' ? 'border-yellow-200 bg-yellow-50' :
+                          'border-red-200 bg-red-50'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <div className={`w-2 h-2 rounded-full ${
+                                entry.status === 'completed' ? 'bg-green-500' :
+                                entry.status === 'running' ? 'bg-yellow-500 animate-pulse' :
+                                'bg-red-500'
+                              }`}></div>
+                              <span className={`font-medium ${
+                                entry.status === 'completed' ? 'text-green-900' :
+                                entry.status === 'running' ? 'text-yellow-900' :
+                                'text-red-900'
+                              }`}>
+                                {entry.status === 'completed' ? 'Successfully Completed' :
+                                 entry.status === 'running' ? 'Currently Running' :
+                                 'Failed'}
+                              </span>
+                              <span className="text-sm text-gray-500">
+                                {formatDate(entry.started_at)}
+                              </span>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                              <div>
+                                <span className="text-gray-500">Sheets Synced:</span>
+                                <div className="font-medium">{entry.sheets_synced}/{entry.total_sheets}</div>
+                              </div>
+                              <div>
+                                <span className="text-gray-500">Duration:</span>
+                                <div className="font-medium">{formatDuration(entry.duration_seconds)}</div>
+                              </div>
+                              <div>
+                                <span className="text-gray-500">Rows Processed:</span>
+                                <div className="font-medium">{entry.rows_processed?.toLocaleString() || 'N/A'}</div>
+                              </div>
+                              <div>
+                                <span className="text-gray-500">Status:</span>
+                                <div className={`font-medium capitalize ${
+                                  entry.status === 'completed' ? 'text-green-700' :
+                                  entry.status === 'running' ? 'text-yellow-700' :
+                                  'text-red-700'
+                                }`}>
+                                  {entry.status}
+                                </div>
+                              </div>
+                            </div>
+
+                            {entry.error_message && (
+                              <div className="mt-3 p-2 bg-red-100 border border-red-200 rounded text-sm text-red-700">
+                                <strong>Error:</strong> {entry.error_message}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
 
             {/* Charts Section */}
             <div className="bg-white rounded-xl shadow-sm border p-6">
