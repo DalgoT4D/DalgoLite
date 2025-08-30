@@ -171,7 +171,15 @@ export default function HomePage() {
         await fetchConnectedSheets()
         setDeleteConfirmSheet(null)
       } else {
-        alert('Failed to delete sheet. Please try again.')
+        // Handle different error types
+        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }))
+        
+        if (response.status === 400 && errorData.detail.includes('transformation projects')) {
+          // Show specific error for transformation project dependencies
+          alert(errorData.detail)
+        } else {
+          alert('Failed to delete sheet. Please try again.')
+        }
       }
     } catch (error) {
       console.error('Error deleting sheet:', error)
@@ -390,26 +398,36 @@ export default function HomePage() {
                                 </div>
                               </div>
 
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1">
                                 <button
                                   onClick={() => handleRefreshSheet(sheet)}
                                   disabled={isRefreshing}
-                                  className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-3 py-1 rounded text-sm font-medium transition-colors flex items-center gap-1"
+                                  className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white p-2 rounded-lg transition-colors"
+                                  title="Sync data from Google Sheets"
                                 >
-                                  <RefreshCw size={12} className={isRefreshing ? 'animate-spin' : ''} />
-                                  Sync
+                                  <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
                                 </button>
                                 <button
                                   onClick={() => router.push(`/sheets/${sheet.id}`)}
-                                  className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm font-medium transition-colors"
+                                  className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg transition-colors"
+                                  title="View sheet details and data"
                                 >
-                                  Details
+                                  <Eye size={16} />
                                 </button>
                                 <button
                                   onClick={() => handleViewCharts(sheet.id)}
-                                  className="bg-gray-600 hover:bg-gray-700 text-white px-3 py-1 rounded text-sm font-medium transition-colors"
+                                  className="bg-purple-600 hover:bg-purple-700 text-white p-2 rounded-lg transition-colors"
+                                  title="View and create charts"
                                 >
-                                  Charts
+                                  <BarChart3 size={16} />
+                                </button>
+                                <button
+                                  onClick={() => confirmDeleteSheet(sheet)}
+                                  disabled={isDeleting}
+                                  className="bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white p-2 rounded-lg transition-colors"
+                                  title="Delete this sheet"
+                                >
+                                  <Trash2 size={16} />
                                 </button>
                               </div>
                             </div>
@@ -454,18 +472,20 @@ export default function HomePage() {
                               </div>
                             </div>
 
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1">
                               <button
                                 onClick={() => router.push(`/projects/${project.id}`)}
-                                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm font-medium transition-colors"
+                                className="bg-green-600 hover:bg-green-700 text-white p-2 rounded-lg transition-colors"
+                                title="View project details and pipeline"
                               >
-                                Details
+                                <Settings size={16} />
                               </button>
                               <button
                                 onClick={() => router.push(`/charts?project=${project.id}`)}
-                                className="bg-gray-600 hover:bg-gray-700 text-white px-3 py-1 rounded text-sm font-medium transition-colors"
+                                className="bg-purple-600 hover:bg-purple-700 text-white p-2 rounded-lg transition-colors"
+                                title="View and create charts"
                               >
-                                Charts
+                                <BarChart3 size={16} />
                               </button>
                             </div>
                           </div>

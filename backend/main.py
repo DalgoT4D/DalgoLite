@@ -720,11 +720,31 @@ async def resync_sheet_data(sheet_id: int, db: Session = Depends(get_db)):
 async def delete_sheet(sheet_id: int, db: Session = Depends(get_db)):
     """Delete a connected sheet and all its charts"""
     try:
+        # Check if sheet exists
         sheet_repo = SheetRepository(db)
+        sheet = sheet_repo.get_sheet_by_id(sheet_id)
+        
+        if not sheet:
+            raise HTTPException(status_code=404, detail="Sheet not found")
+        
+        # Check if sheet is used in any transformation projects
+        project_repo = TransformationProjectRepository(db)
+        projects_using_sheet = db.query(TransformationProject).filter(
+            TransformationProject.sheet_ids.contains([sheet_id])
+        ).all()
+        
+        if projects_using_sheet:
+            project_names = [project.name for project in projects_using_sheet]
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot delete sheet. It is used in transformation projects: {', '.join(project_names)}. Please delete these projects first."
+            )
+        
+        # Proceed with deletion if no transformation projects use this sheet
         success = sheet_repo.delete_sheet(sheet_id)
         
         if not success:
-            raise HTTPException(status_code=404, detail="Sheet not found")
+            raise HTTPException(status_code=500, detail="Failed to delete sheet")
         
         return {"message": "Sheet deleted successfully"}
         
