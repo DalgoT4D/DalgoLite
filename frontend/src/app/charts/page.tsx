@@ -799,7 +799,7 @@ export default function ChartsPage() {
             </div>
             <div>
               <p className="text-sm text-gray-600">Columns</p>
-              <p className="text-2xl font-bold text-gray-900">{sheet.columns.length}</p>
+              <p className="text-2xl font-bold text-gray-900">{sheet.columns?.length || 0}</p>
             </div>
             <div>
               <p className="text-sm text-gray-600">Charts Created</p>
@@ -859,7 +859,7 @@ export default function ChartsPage() {
             <BarChart3 className="mx-auto h-12 w-12 text-gray-400 mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">No charts created yet</h3>
             <p className="text-gray-600 mb-6">
-              Create your first chart from the {sheet.columns.length} available columns.
+              Create your first chart from the {sheet.columns?.length || 0} available columns.
             </p>
             <button
               onClick={() => setShowCreateChart(true)}
@@ -1001,7 +1001,7 @@ export default function ChartsPage() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="">Select a column</option>
-                    {sheet.columns.map((column, idx) => (
+                    {sheet.columns?.map((column, idx) => (
                       <option key={idx} value={column}>{column}</option>
                     ))}
                   </select>
@@ -1045,7 +1045,7 @@ export default function ChartsPage() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">Use X-axis column for aggregation</option>
-                      {(selectedSheetForCreation || sheet)?.columns.map((column, idx) => (
+                      {(selectedSheetForCreation || sheet)?.columns?.map((column, idx) => (
                         <option key={idx} value={column}>{column}</option>
                       ))}
                     </select>
@@ -1465,7 +1465,7 @@ return (
                   <div>
                     <h2 className="text-2xl font-bold text-gray-900 mb-1">{sheetData.title}</h2>
                     <p className="text-gray-600">
-                      {sheetData.charts.length} chart{sheetData.charts.length !== 1 ? 's' : ''} • {sheetData.total_rows.toLocaleString()} rows • {sheetData.columns.length} columns
+                      {sheetData.charts?.length || 0} chart{(sheetData.charts?.length || 0) !== 1 ? 's' : ''} • {sheetData.total_rows?.toLocaleString() || '0'} rows • {sheetData.columns?.length || 0} columns
                     </p>
                   </div>
                   <div className="flex gap-3">
