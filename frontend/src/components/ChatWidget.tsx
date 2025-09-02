@@ -17,6 +17,13 @@ interface ChatWidgetProps {
   context?: string // Additional context like "viewing bar chart" etc.
 }
 
+interface FormattedBlock {
+  type: 'text' | 'bold' | 'list' | 'section'
+  content?: string | string[]
+  items?: string[]
+  title?: string
+}
+
 export default function ChatWidget({ chartId, sheetId, projectId, context }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [isMinimized, setIsMinimized] = useState(false)
@@ -25,6 +32,58 @@ export default function ChatWidget({ chartId, sheetId, projectId, context }: Cha
   const [isLoading, setIsLoading] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const formatAssistantMessage = (content: string): FormattedBlock[] => {
+    const blocks: FormattedBlock[] = []
+    const lines = content.split('\n')
+    let currentList: string[] = []
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim()
+      
+      if (!line) {
+        if (currentList.length > 0) {
+          blocks.push({ type: 'list', items: currentList })
+          currentList = []
+        }
+        continue
+      }
+      
+      // Check for bullet points
+      if (line.startsWith('• ') || line.startsWith('- ')) {
+        currentList.push(line.substring(2))
+        continue
+      }
+      
+      // Flush any pending list
+      if (currentList.length > 0) {
+        blocks.push({ type: 'list', items: currentList })
+        currentList = []
+      }
+      
+      // Check for bold text (entire line)
+      if (line.includes('**') && line.match(/^\*\*.*\*\*:?$/)) {
+        const boldText = line.replace(/\*\*/g, '').replace(/:$/, '')
+        blocks.push({ type: 'bold', content: boldText })
+        continue
+      }
+      
+      // Regular text with inline bold formatting
+      if (line.includes('**')) {
+        const formattedText = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        blocks.push({ type: 'text', content: formattedText })
+      } else {
+        blocks.push({ type: 'text', content: line })
+      }
+    }
+    
+    // Flush any remaining list
+    if (currentList.length > 0) {
+      blocks.push({ type: 'list', items: currentList })
+    }
+    
+    return blocks
+  }
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -183,7 +242,40 @@ export default function ChatWidget({ chartId, sheetId, projectId, context }: Cha
                         : 'bg-gray-100 text-gray-900'
                     }`}
                   >
-                    <p className="whitespace-pre-wrap">{message.content}</p>
+                    {message.type === 'user' ? (
+                      <p className="whitespace-pre-wrap">{message.content}</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {formatAssistantMessage(message.content).map((block, idx) => (
+                          <div key={idx}>
+                            {block.type === 'text' && (
+                              <p 
+                                className="text-gray-700"
+                                dangerouslySetInnerHTML={{ __html: block.content || '' }}
+                              />
+                            )}
+                            {block.type === 'bold' && <p className="text-gray-900 font-semibold">{block.content}</p>}
+                            {block.type === 'list' && (
+                              <ul className="list-disc list-inside space-y-1 text-gray-700 ml-2">
+                                {block.items?.map((item, itemIdx) => (
+                                  <li key={itemIdx} dangerouslySetInnerHTML={{ __html: item }} />
+                                ))}
+                              </ul>
+                            )}
+                            {block.type === 'section' && (
+                              <div className="mt-3">
+                                <h4 className="font-semibold text-gray-900 mb-1">{block.title}</h4>
+                                <div className="space-y-1">
+                                  {Array.isArray(block.content) && block.content.map((item, itemIdx) => (
+                                    <p key={itemIdx} className="text-gray-700 text-sm">{item}</p>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <p className={`text-xs mt-1 ${
                       message.type === 'user' ? 'text-blue-100' : 'text-gray-500'
                     }`}>
