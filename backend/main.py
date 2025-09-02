@@ -22,7 +22,7 @@ load_dotenv()
 
 from llm_service import llm_service
 from data_context import DataContextGenerator
-from chart_service import ChartCreationService, get_chart_creation_tools
+from chart_service import ChartCreationService, get_chart_tools
 
 # Create database tables
 create_tables()
@@ -1970,8 +1970,8 @@ async def chat_with_data(request: ChatRequest, db: Session = Depends(get_db)):
         if "error" in context:
             raise HTTPException(status_code=404, detail=context["error"])
         
-        # Get chart creation tools
-        tools = get_chart_creation_tools()
+        # Get chart tools (creation and lookup)
+        tools = get_chart_tools()
         
         # Chat with LLM using the generated context and tools
         llm_response = await llm_service.chat_with_context(request.message, context, tools)
@@ -1985,7 +1985,7 @@ async def chat_with_data(request: ChatRequest, db: Session = Depends(get_db)):
             created_charts = []
             
             for tool_call in llm_response.get("tool_calls", []):
-                if tool_call.name == "create_chart":
+                if hasattr(tool_call, 'name') and tool_call.name == "create_chart":
                     # Extract parameters
                     params = tool_call.input
                     
@@ -2003,7 +2003,42 @@ async def chat_with_data(request: ChatRequest, db: Session = Depends(get_db)):
                         final_response += f"\n\n{result['message']}"
                     else:
                         final_response += f"\n\n❌ Error creating chart: {result['error']}"
+                
+                elif hasattr(tool_call, 'name') and tool_call.name == "find_chart":
+                    # Find chart by name
+                    params = tool_call.input
+                    result = await chart_service.find_chart_by_name(
+                        chart_name=params["chart_name"],
+                        sheet_id=request.sheet_id,
+                        project_id=request.project_id
+                    )
+                    
+                    if result["success"]:
+                        chart_info = result["chart"]
+                        # Generate enhanced context for the found chart
+                        enhanced_context = context_generator.get_chart_context(chart_info["id"])
+                        
+                        # Create a detailed context for Claude to analyze
+                        analysis_context = {
+                            "chart_details": chart_info,
+                            "data_context": enhanced_context
+                        }
+                        
+                        # Ask Claude to analyze and explain the chart
+                        analysis_prompt = f"Please analyze and explain the '{chart_info['name']}' chart based on the provided context. Focus on insights, patterns, and what the data shows."
+                        analysis_response = await llm_service.chat_with_context(analysis_prompt, analysis_context)
+                        
+                        print(f"DEBUG: analysis_response type: {analysis_response.get('type')}")
+                        print(f"DEBUG: analysis_response content: {analysis_response.get('content', '')[:200]}...")
+                        
+                        if analysis_response.get("type") == "text":
+                            final_response += f"\n\n📊 **{chart_info['name']}** Analysis:\n\n{analysis_response.get('content', '')}"
+                        else:
+                            final_response += f"\n\n📊 Found chart: **{chart_info['name']}** but couldn't generate analysis."
+                    else:
+                        final_response += f"\n\n❌ {result['error']}"
             
+            print(f"DEBUG: final_response before return: {final_response[:500]}...")
             return {
                 "response": final_response,
                 "context_provided": bool(context),

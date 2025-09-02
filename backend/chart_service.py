@@ -85,8 +85,51 @@ class ChartCreationService:
             }
 
 
-def get_chart_creation_tools() -> list:
-    """Get the function definition for chart creation"""
+    async def find_chart_by_name(self, chart_name: str, sheet_id: Optional[int] = None, project_id: Optional[int] = None) -> Dict[str, Any]:
+        """Find a chart by name and return its details"""
+        try:
+            query = self.db.query(SavedChart)
+            
+            # Filter by sheet or project
+            if sheet_id:
+                query = query.filter(SavedChart.sheet_id == sheet_id)
+            elif project_id:
+                query = query.filter(SavedChart.project_id == project_id)
+            
+            # Search by name (case insensitive partial match)
+            charts = query.filter(SavedChart.chart_name.ilike(f"%{chart_name}%")).all()
+            
+            if not charts:
+                return {
+                    "success": False,
+                    "error": f"No charts found matching '{chart_name}'"
+                }
+            
+            # Return the first/best match
+            chart = charts[0]
+            
+            return {
+                "success": True,
+                "chart": {
+                    "id": chart.id,
+                    "name": chart.chart_name,
+                    "type": chart.chart_type,
+                    "x_axis": chart.x_axis_column,
+                    "y_axis": chart.y_axis_column,
+                    "config": chart.chart_config,
+                    "created_at": chart.created_at.isoformat() if chart.created_at else None
+                }
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Error finding chart: {str(e)}"
+            }
+
+
+def get_chart_tools() -> list:
+    """Get all available chart-related functions"""
     return [
         {
             "name": "create_chart",
@@ -119,6 +162,20 @@ def get_chart_creation_tools() -> list:
                     }
                 },
                 "required": ["chart_name", "chart_type", "x_axis_column"]
+            }
+        },
+        {
+            "name": "find_chart",
+            "description": "Find and get details about an existing chart by name",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "chart_name": {
+                        "type": "string",
+                        "description": "Name or partial name of the chart to find"
+                    }
+                },
+                "required": ["chart_name"]
             }
         }
     ]

@@ -53,15 +53,14 @@ The most actionable insight: Focus marketing efforts on morning timeframes for b
 
 Want me to explore any specific time period in more detail?
 
-CHART CREATION:
-You can create charts when users request them! When suggesting charts or when users ask you to create one, use the create_chart function with:
-- chart_name: Descriptive name
-- chart_type: bar, line, pie, scatter, or histogram  
-- x_axis_column: Column name from the available data
-- y_axis_column: Optional, for numeric aggregation
-- aggregation_type: count, sum, avg, min, max, or median
+AVAILABLE FUNCTIONS:
+• **create_chart**: Create new charts when users request them
+• **find_chart**: Look up existing charts by name to explain or analyze them
 
-Always confirm chart creation with a success message."""
+When users mention a specific chart name or ask about "the gender chart" etc., use find_chart first to get its details, then provide detailed analysis.
+
+CHART CREATION:
+Use create_chart with: chart_name, chart_type (bar/line/pie/scatter/histogram), x_axis_column, optional y_axis_column, aggregation_type (count/sum/avg/min/max/median)"""
         
         if context:
             system_prompt += f"\n\nContext about the current data:\n{json.dumps(context, indent=2)}"
@@ -83,9 +82,15 @@ Always confirm chart creation with a success message."""
             
             # Handle function calls if present
             if hasattr(response, 'stop_reason') and response.stop_reason == 'tool_use':
+                # Extract text content from text blocks
+                text_content = ""
+                for block in response.content:
+                    if hasattr(block, 'type') and block.type == 'text':
+                        text_content += block.text
+                
                 return {
                     "type": "function_call",
-                    "content": response.content[0].text if response.content else "",
+                    "content": text_content,
                     "tool_calls": [block for block in response.content if hasattr(block, 'type') and block.type == 'tool_use']
                 }
             else:
