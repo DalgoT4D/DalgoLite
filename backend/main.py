@@ -22,6 +22,7 @@ load_dotenv()
 
 from llm_service import llm_service
 from data_context import DataContextGenerator
+from chart_service import ChartCreationService, get_chart_creation_tools
 
 # Create database tables
 create_tables()
@@ -1954,7 +1955,7 @@ async def get_project_pipeline_history(project_id: int, limit: int = 20, db: Ses
 @app.post("/chat")
 async def chat_with_data(request: ChatRequest, db: Session = Depends(get_db)):
     """
-    Chat with LLM about charts and data with rich context
+    Chat with LLM about charts and data with rich context and chart creation capability
     """
     try:
         # Generate context based on what the user is viewing
@@ -1969,13 +1970,61 @@ async def chat_with_data(request: ChatRequest, db: Session = Depends(get_db)):
         if "error" in context:
             raise HTTPException(status_code=404, detail=context["error"])
         
-        # Chat with LLM using the generated context
-        response = await llm_service.chat_with_context(request.message, context)
+        # Get chart creation tools
+        tools = get_chart_creation_tools()
         
-        return {
-            "response": response,
-            "context_provided": bool(context)
-        }
+        # Chat with LLM using the generated context and tools
+        llm_response = await llm_service.chat_with_context(request.message, context, tools)
+        
+        # Handle different response types
+        if llm_response.get("type") == "function_call":
+            # Execute function calls
+            chart_service = ChartCreationService(db)
+            
+            final_response = llm_response.get("content", "")
+            created_charts = []
+            
+            for tool_call in llm_response.get("tool_calls", []):
+                if tool_call.name == "create_chart":
+                    # Extract parameters
+                    params = tool_call.input
+                    
+                    # Add sheet_id or project_id from context
+                    if request.sheet_id:
+                        params["sheet_id"] = request.sheet_id
+                    elif request.project_id:
+                        params["project_id"] = request.project_id
+                    
+                    # Create the chart
+                    result = await chart_service.create_chart(**params)
+                    created_charts.append(result)
+                    
+                    if result["success"]:
+                        final_response += f"\n\n{result['message']}"
+                    else:
+                        final_response += f"\n\n❌ Error creating chart: {result['error']}"
+            
+            return {
+                "response": final_response,
+                "context_provided": bool(context),
+                "charts_created": created_charts,
+                "type": "function_call"
+            }
+        
+        elif llm_response.get("type") == "error":
+            return {
+                "response": llm_response.get("content", "Unknown error"),
+                "context_provided": bool(context),
+                "type": "error"
+            }
+        
+        else:
+            # Regular text response
+            return {
+                "response": llm_response.get("content", ""),
+                "context_provided": bool(context),
+                "type": "text"
+            }
         
     except HTTPException:
         raise

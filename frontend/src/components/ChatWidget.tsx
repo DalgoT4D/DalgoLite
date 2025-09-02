@@ -15,6 +15,7 @@ interface ChatWidgetProps {
   sheetId?: number
   projectId?: number
   context?: string // Additional context like "viewing bar chart" etc.
+  onChartCreated?: () => void // Callback to refresh charts when created
 }
 
 interface FormattedBlock {
@@ -24,7 +25,7 @@ interface FormattedBlock {
   title?: string
 }
 
-export default function ChatWidget({ chartId, sheetId, projectId, context }: ChatWidgetProps) {
+export default function ChatWidget({ chartId, sheetId, projectId, context, onChartCreated }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [isMinimized, setIsMinimized] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
@@ -138,6 +139,13 @@ export default function ChatWidget({ chartId, sheetId, projectId, context }: Cha
           timestamp: new Date()
         }
         setMessages(prev => [...prev, assistantMessage])
+        
+        // If charts were created, refresh the parent page
+        if (data.charts_created && data.charts_created.some((chart: any) => chart.success)) {
+          if (onChartCreated) {
+            onChartCreated()
+          }
+        }
       } else {
         const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }))
         const errorMessage: Message = {

@@ -12,7 +12,7 @@ class LLMProvider(ABC):
     """Abstract base class for LLM providers"""
     
     @abstractmethod
-    async def chat(self, message: str, context: Optional[Dict[str, Any]] = None) -> str:
+    async def chat(self, message: str, context: Optional[Dict[str, Any]] = None, tools: Optional[list] = None) -> Dict[str, Any]:
         """Send a chat message and return response"""
         pass
 
@@ -24,7 +24,7 @@ class AnthropicProvider(LLMProvider):
         self.client = Anthropic(api_key=api_key)
         self.model = model
     
-    async def chat(self, message: str, context: Optional[Dict[str, Any]] = None) -> str:
+    async def chat(self, message: str, context: Optional[Dict[str, Any]] = None, tools: Optional[list] = None) -> Dict[str, Any]:
         system_prompt = """You are a friendly data analysis assistant. Provide clear, structured responses that are easy to scan.
 
 RESPONSE FORMAT:
@@ -51,21 +51,53 @@ Your data shows **3 key patterns** worth exploring:
 
 The most actionable insight: Focus marketing efforts on morning timeframes for better results.
 
-Want me to explore any specific time period in more detail?"""
+Want me to explore any specific time period in more detail?
+
+CHART CREATION:
+You can create charts when users request them! When suggesting charts or when users ask you to create one, use the create_chart function with:
+- chart_name: Descriptive name
+- chart_type: bar, line, pie, scatter, or histogram  
+- x_axis_column: Column name from the available data
+- y_axis_column: Optional, for numeric aggregation
+- aggregation_type: count, sum, avg, min, max, or median
+
+Always confirm chart creation with a success message."""
         
         if context:
             system_prompt += f"\n\nContext about the current data:\n{json.dumps(context, indent=2)}"
         
         try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=1000,
-                system=system_prompt,
-                messages=[{"role": "user", "content": message}]
-            )
-            return response.content[0].text
+            # Prepare API call parameters
+            api_params = {
+                "model": self.model,
+                "max_tokens": 1000,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": message}]
+            }
+            
+            # Add tools if provided
+            if tools:
+                api_params["tools"] = tools
+            
+            response = self.client.messages.create(**api_params)
+            
+            # Handle function calls if present
+            if hasattr(response, 'stop_reason') and response.stop_reason == 'tool_use':
+                return {
+                    "type": "function_call",
+                    "content": response.content[0].text if response.content else "",
+                    "tool_calls": [block for block in response.content if hasattr(block, 'type') and block.type == 'tool_use']
+                }
+            else:
+                return {
+                    "type": "text",
+                    "content": response.content[0].text if response.content else "No response"
+                }
         except Exception as e:
-            return f"Sorry, I encountered an error: {str(e)}"
+            return {
+                "type": "error",
+                "content": f"Sorry, I encountered an error: {str(e)}"
+            }
 
 
 class OpenAIProvider(LLMProvider):
@@ -75,9 +107,9 @@ class OpenAIProvider(LLMProvider):
         self.api_key = api_key
         self.model = model
     
-    async def chat(self, message: str, context: Optional[Dict[str, Any]] = None) -> str:
+    async def chat(self, message: str, context: Optional[Dict[str, Any]] = None, tools: Optional[list] = None) -> Dict[str, Any]:
         # TODO: Implement OpenAI integration
-        return "OpenAI provider not yet implemented"
+        return {"type": "error", "content": "OpenAI provider not yet implemented"}
 
 
 class LLMService:
@@ -113,15 +145,15 @@ class LLMService:
         except Exception as e:
             self._error_message = f"Failed to configure LLM service: {str(e)}"
     
-    async def chat_with_context(self, message: str, context: Optional[Dict[str, Any]] = None) -> str:
+    async def chat_with_context(self, message: str, context: Optional[Dict[str, Any]] = None, tools: Optional[list] = None) -> Dict[str, Any]:
         """Chat with the LLM using provided context"""
         if not self._is_configured:
-            return f"Chat service unavailable: {self._error_message}"
+            return {"type": "error", "content": f"Chat service unavailable: {self._error_message}"}
         
         if not self.provider:
-            return "Chat service not properly initialized"
+            return {"type": "error", "content": "Chat service not properly initialized"}
         
-        return await self.provider.chat(message, context)
+        return await self.provider.chat(message, context, tools)
     
     def is_configured(self) -> bool:
         """Check if the LLM service is properly configured"""

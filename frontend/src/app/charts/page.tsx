@@ -1085,6 +1085,7 @@ export default function ChartsPage() {
       <ChatWidget 
         sheetId={sheet.id} 
         context={`Sheet: ${sheet.title}`}
+        onChartCreated={fetchCharts}
       />
     </div>
   )
@@ -1429,6 +1430,7 @@ if (projectId && project) {
       <ChatWidget 
         projectId={project.id} 
         context={`Project: ${project.name}`}
+        onChartCreated={fetchProjectCharts}
       />
     </div>
   )
@@ -1754,7 +1756,10 @@ return (
     )}
 
     {/* Chat Widget */}
-    <ChatWidget context="All Charts View" />
+    <ChatWidget 
+      context="All Charts View" 
+      onChartCreated={fetchAllSheetsWithCharts}
+    />
   </div>
 )
 }
