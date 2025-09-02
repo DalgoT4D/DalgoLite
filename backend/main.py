@@ -18,8 +18,10 @@ from pydantic import BaseModel
 import hashlib
 import asyncio
 import sqlite3
-
 load_dotenv()
+
+from llm_service import llm_service
+from data_context import DataContextGenerator
 
 # Create database tables
 create_tables()
@@ -74,6 +76,12 @@ class ProjectCreateRequest(BaseModel):
 
 class JoinAnalysisRequest(BaseModel):
     sheet_ids: List[int]
+
+class ChatRequest(BaseModel):
+    message: str
+    chart_id: Optional[int] = None
+    sheet_id: Optional[int] = None
+    project_id: Optional[int] = None
 
 def extract_spreadsheet_id(input_str: str) -> str:
     """
@@ -1942,6 +1950,42 @@ async def get_project_pipeline_history(project_id: int, limit: int = 20, db: Ses
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/chat")
+async def chat_with_data(request: ChatRequest, db: Session = Depends(get_db)):
+    """
+    Chat with LLM about charts and data with rich context
+    """
+    try:
+        # Generate context based on what the user is viewing
+        context_generator = DataContextGenerator(db)
+        context = context_generator.generate_chat_context(
+            chart_id=request.chart_id,
+            sheet_id=request.sheet_id,
+            project_id=request.project_id
+        )
+        
+        # Check if context generation failed
+        if "error" in context:
+            raise HTTPException(status_code=404, detail=context["error"])
+        
+        # Chat with LLM using the generated context
+        response = await llm_service.chat_with_context(request.message, context)
+        
+        return {
+            "response": response,
+            "context_provided": bool(context)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Handle LLM service errors gracefully
+        error_message = str(e)
+        if "LLM_API_KEY" in error_message:
+            raise HTTPException(status_code=500, detail="LLM service not configured. Please check API credentials.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Chat service error: {error_message}")
 
 if __name__ == "__main__":
     import uvicorn

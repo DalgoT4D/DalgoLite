@@ -1,0 +1,109 @@
+"""
+Modular LLM service that supports multiple providers (Claude, OpenAI, etc.)
+"""
+import os
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional
+import json
+from anthropic import Anthropic
+
+
+class LLMProvider(ABC):
+    """Abstract base class for LLM providers"""
+    
+    @abstractmethod
+    async def chat(self, message: str, context: Optional[Dict[str, Any]] = None) -> str:
+        """Send a chat message and return response"""
+        pass
+
+
+class AnthropicProvider(LLMProvider):
+    """Anthropic Claude provider"""
+    
+    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022"):
+        self.client = Anthropic(api_key=api_key)
+        self.model = model
+    
+    async def chat(self, message: str, context: Optional[Dict[str, Any]] = None) -> str:
+        system_prompt = """You are a data analysis assistant helping users understand their charts and data. 
+You have access to chart metadata, sample data, and data quality information.
+Provide helpful insights about data patterns, quality issues, and visualization recommendations.
+Be conversational and focus on actionable insights."""
+        
+        if context:
+            system_prompt += f"\n\nContext about the current data:\n{json.dumps(context, indent=2)}"
+        
+        try:
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=1000,
+                system=system_prompt,
+                messages=[{"role": "user", "content": message}]
+            )
+            return response.content[0].text
+        except Exception as e:
+            return f"Sorry, I encountered an error: {str(e)}"
+
+
+class OpenAIProvider(LLMProvider):
+    """OpenAI GPT provider (placeholder for future implementation)"""
+    
+    def __init__(self, api_key: str, model: str = "gpt-4"):
+        self.api_key = api_key
+        self.model = model
+    
+    async def chat(self, message: str, context: Optional[Dict[str, Any]] = None) -> str:
+        # TODO: Implement OpenAI integration
+        return "OpenAI provider not yet implemented"
+
+
+class LLMService:
+    """Main LLM service that manages different providers"""
+    
+    def __init__(self):
+        self.provider = None
+        self._is_configured = False
+        self._error_message = None
+        self._configure_provider()
+    
+    def _configure_provider(self):
+        """Configure the LLM provider, handling missing credentials gracefully"""
+        try:
+            provider_name = os.getenv("LLM_PROVIDER", "anthropic").lower()
+            api_key = os.getenv("LLM_API_KEY")
+            model = os.getenv("LLM_MODEL")
+            
+            if not api_key or api_key == "your_anthropic_api_key_here":
+                self._error_message = "LLM service not configured. Please set LLM_API_KEY in environment variables."
+                return
+            
+            if provider_name == "anthropic":
+                self.provider = AnthropicProvider(api_key, model or "claude-3-5-sonnet-20241022")
+            elif provider_name == "openai":
+                self.provider = OpenAIProvider(api_key, model or "gpt-4")
+            else:
+                self._error_message = f"Unsupported LLM provider: {provider_name}"
+                return
+            
+            self._is_configured = True
+            
+        except Exception as e:
+            self._error_message = f"Failed to configure LLM service: {str(e)}"
+    
+    async def chat_with_context(self, message: str, context: Optional[Dict[str, Any]] = None) -> str:
+        """Chat with the LLM using provided context"""
+        if not self._is_configured:
+            return f"Chat service unavailable: {self._error_message}"
+        
+        if not self.provider:
+            return "Chat service not properly initialized"
+        
+        return await self.provider.chat(message, context)
+    
+    def is_configured(self) -> bool:
+        """Check if the LLM service is properly configured"""
+        return self._is_configured
+
+
+# Global LLM service instance
+llm_service = LLMService()

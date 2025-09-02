@@ -6,6 +6,7 @@ import { BarChart3, Plus, Trash2, Edit2, Save, X, ArrowLeft } from 'lucide-react
 import { useAuth } from '@/contexts/AuthContext'
 import Navigation from '@/components/Navigation'
 import ChartRenderer from '@/components/ChartRenderer'
+import ChatWidget from '@/components/ChatWidget'
 
 interface Sheet {
   id: number
@@ -1079,6 +1080,12 @@ export default function ChartsPage() {
           </div>
         </div>
       )}
+
+      {/* Chat Widget */}
+      <ChatWidget 
+        sheetId={sheet.id} 
+        context={`Sheet: ${sheet.title}`}
+      />
     </div>
   )
 }
@@ -1417,6 +1424,12 @@ if (projectId && project) {
           </div>
         </div>
       )}
+
+      {/* Chat Widget */}
+      <ChatWidget 
+        projectId={project.id} 
+        context={`Project: ${project.name}`}
+      />
     </div>
   )
 }
@@ -1739,6 +1752,9 @@ return (
         </div>
       </div>
     )}
+
+    {/* Chat Widget */}
+    <ChatWidget context="All Charts View" />
   </div>
 )
 }
