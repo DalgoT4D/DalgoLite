@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, ArrowRight, Database, CheckCircle, Users, Zap } from 'lucide-react'
+import { ArrowLeft, Plus, Database, Zap, Users, Eye, Calendar, Play, CheckCircle } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
-import Navigation from '@/components/Navigation'
+import DashboardLayout from '@/components/DashboardLayout'
 
 interface ConnectedSheet {
   id: number
@@ -15,48 +15,90 @@ interface ConnectedSheet {
   sample_data: string[][]
 }
 
-interface JoinSuggestion {
-  sheet1_id: number
-  sheet1_title: string
-  sheet2_id: number
-  sheet2_title: string
-  suggested_joins: Array<{
-    column1: string
-    column2: string
-    confidence: string
-    reason: string
-  }>
+interface TransformationProject {
+  id: number
+  name: string
+  description: string
+  sheet_ids: number[]
+  created_at: string
+  updated_at: string
 }
 
 export default function TransformPage() {
   const { isAuthenticated, logout } = useAuth()
   const router = useRouter()
-  const [step, setStep] = useState(1)
   const [sheets, setSheets] = useState<ConnectedSheet[]>([])
-  const [selectedSheets, setSelectedSheets] = useState<number[]>([])
-  const [joinSuggestions, setJoinSuggestions] = useState<JoinSuggestion[]>([])
+  const [projects, setProjects] = useState<TransformationProject[]>([])
   const [loading, setLoading] = useState(true)
-  const [projectName, setProjectName] = useState('')
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [newProjectName, setNewProjectName] = useState('')
+  const [newProjectDescription, setNewProjectDescription] = useState('')
+  const [selectedSheets, setSelectedSheets] = useState<number[]>([])
+  const [creating, setCreating] = useState(false)
 
   useEffect(() => {
     if (!isAuthenticated) {
       router.push('/')
       return
     }
-    fetchSheets()
+    fetchData()
   }, [isAuthenticated, router])
 
-  const fetchSheets = async () => {
+  const fetchData = async () => {
     try {
-      const response = await fetch('http://localhost:8000/sheets/connected')
-      if (response.ok) {
-        const data = await response.json()
-        setSheets(data.sheets)
+      setLoading(true)
+      
+      // Fetch connected sheets
+      const sheetsResponse = await fetch('http://localhost:8000/sheets/connected')
+      if (sheetsResponse.ok) {
+        const sheetsData = await sheetsResponse.json()
+        setSheets(sheetsData.sheets || [])
       }
+
+      // Fetch transformation projects
+      const projectsResponse = await fetch('http://localhost:8000/projects')
+      if (projectsResponse.ok) {
+        const projectsData = await projectsResponse.json()
+        setProjects(projectsData.projects || [])
+      }
+
     } catch (error) {
-      console.error('Error fetching sheets:', error)
+      console.error('Error fetching data:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleCreateProject = async () => {
+    if (!newProjectName.trim() || selectedSheets.length === 0) return
+    
+    try {
+      setCreating(true)
+      const response = await fetch('http://localhost:8000/projects', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: newProjectName,
+          description: newProjectDescription || `Transform project with ${selectedSheets.length} sheets`,
+          sheet_ids: selectedSheets
+        }),
+      })
+
+      if (response.ok) {
+        const newProject = await response.json()
+        // Redirect to the canvas page for the new project
+        router.push(`/transform/${newProject.id}/canvas`)
+      } else {
+        const errorData = await response.json()
+        alert(`Error creating project: ${errorData.detail}`)
+      }
+    } catch (error) {
+      console.error('Error creating project:', error)
+      alert('Failed to create project. Please try again.')
+    } finally {
+      setCreating(false)
     }
   }
 
@@ -68,73 +110,28 @@ export default function TransformPage() {
     )
   }
 
-  const handleAnalyzeJoins = async () => {
-    if (selectedSheets.length < 2) return
-    
-    try {
-      const response = await fetch('http://localhost:8000/projects/analyze-join', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sheet_ids: selectedSheets })
-      })
-      
-      if (response.ok) {
-        const data = await response.json()
-        setJoinSuggestions(data.join_suggestions)
-        setStep(2)
-      }
-    } catch (error) {
-      console.error('Error analyzing joins:', error)
-    }
-  }
-
-  const handleCreateProject = async () => {
-    if (!projectName.trim()) return
-    
-    try {
-      const response = await fetch('http://localhost:8000/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: projectName,
-          description: `Transform and join ${selectedSheets.length} sheets`,
-          sheet_ids: selectedSheets,
-          mode: 'simple'
-        })
-      })
-      
-      if (response.ok) {
-        const data = await response.json()
-        // Show success message and redirect to project page
-        alert(`Project "${data.name}" created successfully!`)
-        router.push(`/transform/${data.id}`)
-      } else {
-        const errorData = await response.json()
-        alert(`Error creating project: ${errorData.detail}`)
-      }
-    } catch (error) {
-      console.error('Error creating project:', error)
-    }
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString()
   }
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50">
-        <Navigation isAuthenticated={isAuthenticated} onLogout={logout} />
+      <DashboardLayout isAuthenticated={isAuthenticated} onLogout={logout}>
         <div className="flex items-center justify-center py-20">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+            <p className="text-gray-600">Loading transformation projects...</p>
+          </div>
         </div>
-      </div>
+      </DashboardLayout>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Navigation isAuthenticated={isAuthenticated} onLogout={logout} />
-      
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <DashboardLayout isAuthenticated={isAuthenticated} onLogout={logout}>
+      <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="text-center mb-8">
+        <div className="mb-8">
           <button
             onClick={() => router.push('/home')}
             className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 font-medium mb-4"
@@ -142,251 +139,238 @@ export default function TransformPage() {
             <ArrowLeft size={20} />
             Back to Dashboard
           </button>
-          <h1 className="text-3xl font-bold text-gray-900 mb-4">Transform Multiple Sheets</h1>
-          <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-            Combine and clean your data from multiple Google Sheets to create powerful visualizations
-          </p>
-        </div>
-
-        {/* Step Indicator */}
-        <div className="flex items-center justify-center mb-8">
-          <div className="flex items-center gap-4">
-            <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
-              step >= 1 ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-500'
-            }`}>
-              1
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900 mb-2">AI Transform Projects</h1>
+              <p className="text-lg text-gray-600">
+                Create visual transformation pipelines using natural language AI
+              </p>
             </div>
-            <div className={`w-16 h-1 ${step >= 2 ? 'bg-blue-600' : 'bg-gray-200'}`}></div>
-            <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
-              step >= 2 ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-500'
-            }`}>
-              2
-            </div>
-            <div className={`w-16 h-1 ${step >= 3 ? 'bg-blue-600' : 'bg-gray-200'}`}></div>
-            <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
-              step >= 3 ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-500'
-            }`}>
-              3
-            </div>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              disabled={sheets.length === 0}
+              className={`flex items-center gap-2 px-6 py-3 rounded-xl font-semibold transition-all duration-200 shadow-lg ${
+                sheets.length === 0 
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                  : 'bg-gradient-to-r from-green-600 to-emerald-700 hover:from-green-700 hover:to-emerald-800 text-white hover:shadow-xl transform hover:scale-105'
+              }`}
+              title={sheets.length === 0 ? 'Connect at least one sheet first' : 'Create a new transformation project'}
+            >
+              <Plus size={20} />
+              New Transform Project
+            </button>
           </div>
         </div>
 
-        {/* Step 1: Select Sheets */}
-        {step === 1 && (
-          <div className="bg-white rounded-xl shadow-sm border p-8">
-            <h2 className="text-xl font-semibold text-gray-900 mb-6">Step 1: Select Sheets to Transform</h2>
-            
-            {sheets.length < 2 ? (
-              <div className="text-center py-8">
-                <p className="text-gray-600">You need at least 2 connected sheets to use transformations.</p>
+        {/* Projects Grid */}
+        {projects.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+            {projects.map((project) => (
+              <div key={project.id} className="bg-white rounded-xl shadow-sm border border-gray-200 hover:shadow-lg transition-all duration-200">
+                <div className="p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="bg-green-100 p-2 rounded-lg">
+                      <Zap className="text-green-600" size={24} />
+                    </div>
+                    <span className="text-xs text-gray-500">{project.sheet_ids.length} sheets</span>
+                  </div>
+                  
+                  <h3 className="font-semibold text-gray-900 mb-2">{project.name}</h3>
+                  <p className="text-sm text-gray-600 mb-4 line-clamp-2">{project.description}</p>
+                  
+                  <div className="flex items-center justify-between text-xs text-gray-500 mb-4">
+                    <div className="flex items-center gap-1">
+                      <Calendar size={12} />
+                      <span>Created {formatDate(project.created_at)}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => router.push(`/transform/${project.id}/canvas`)}
+                      className="flex-1 bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded-lg font-medium transition-colors text-sm"
+                    >
+                      Open Canvas
+                    </button>
+                    <button
+                      onClick={() => router.push(`/transform/${project.id}/canvas`)}
+                      className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-lg font-medium transition-colors text-sm"
+                      title="View canvas"
+                    >
+                      <Eye size={16} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-16 mb-12">
+            <div className="bg-gradient-to-br from-green-100 to-emerald-100 rounded-full p-6 w-24 h-24 mx-auto mb-6">
+              <Zap className="mx-auto h-12 w-12 text-green-600" />
+            </div>
+            <h3 className="text-2xl font-bold text-gray-900 mb-3">Create Your First Transform Project</h3>
+            <p className="text-gray-600 mb-8 text-lg max-w-md mx-auto">
+              Build visual transformation pipelines with AI-powered steps that understand natural language.
+            </p>
+            {sheets.length === 0 ? (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 max-w-md mx-auto mb-6">
+                <p className="text-yellow-800 text-sm">
+                  You need to connect at least one Google Sheet before creating a transformation project.
+                </p>
                 <button
                   onClick={() => router.push('/dashboard')}
-                  className="mt-4 bg-blue-600 text-white px-6 py-2 rounded-lg"
+                  className="mt-2 text-yellow-700 hover:text-yellow-900 font-medium underline"
                 >
-                  Connect More Sheets
+                  Connect your first sheet
                 </button>
               </div>
             ) : (
-              <div className="space-y-4">
-                {sheets.map((sheet) => (
-                  <div
-                    key={sheet.id}
-                    onClick={() => handleSheetSelection(sheet.id)}
-                    className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
-                      selectedSheets.includes(sheet.id)
-                        ? 'border-blue-500 bg-blue-50'
-                        : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h3 className="font-semibold text-gray-900">{sheet.title}</h3>
-                        <p className="text-sm text-gray-600">
-                          {sheet.total_rows} rows, {sheet.columns.length} columns
-                        </p>
-                        <div className="flex gap-1 mt-2">
-                          {sheet.columns.slice(0, 4).map((col, idx) => (
-                            <span key={idx} className="text-xs bg-gray-100 px-2 py-1 rounded">
-                              {col}
-                            </span>
-                          ))}
-                          {sheet.columns.length > 4 && (
-                            <span className="text-xs text-gray-500">+{sheet.columns.length - 4} more</span>
-                          )}
-                        </div>
-                      </div>
-                      <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${
-                        selectedSheets.includes(sheet.id)
-                          ? 'border-blue-500 bg-blue-500'
-                          : 'border-gray-300'
-                      }`}>
-                        {selectedSheets.includes(sheet.id) && (
-                          <CheckCircle className="text-white" size={16} />
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                
-                <div className="flex justify-end pt-4">
-                  <button
-                    onClick={handleAnalyzeJoins}
-                    disabled={selectedSheets.length < 2}
-                    className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white px-6 py-3 rounded-lg font-semibold flex items-center gap-2"
-                  >
-                    Analyze Joins
-                    <ArrowRight size={20} />
-                  </button>
-                </div>
-              </div>
+              <button
+                onClick={() => setShowCreateModal(true)}
+                className="bg-gradient-to-r from-green-600 to-emerald-700 hover:from-green-700 hover:to-emerald-800 text-white px-8 py-4 rounded-xl font-semibold inline-flex items-center gap-3 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105 text-lg"
+              >
+                <Plus size={24} />
+                Create Transform Project
+              </button>
             )}
           </div>
         )}
 
-        {/* Step 2: Review Join Suggestions */}
-        {step === 2 && (
-          <div className="bg-white rounded-xl shadow-sm border p-8">
-            <h2 className="text-xl font-semibold text-gray-900 mb-6">Step 2: How should we combine your sheets?</h2>
-            
-            {joinSuggestions.length === 0 ? (
-              <div className="text-center py-8">
-                <p className="text-gray-600 mb-4">
-                  We couldn't automatically detect common columns between your sheets.
-                </p>
-                <p className="text-sm text-gray-500">
-                  You can still create a project and manually configure joins in the next step.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {joinSuggestions.map((suggestion, idx) => (
-                  <div key={idx} className="border border-gray-200 rounded-lg p-6">
-                    <div className="flex items-center gap-4 mb-4">
-                      <div className="bg-blue-100 p-2 rounded">
-                        <Users className="text-blue-600" size={20} />
-                      </div>
-                      <div>
-                        <h3 className="font-semibold">
-                          {suggestion.sheet1_title} + {suggestion.sheet2_title}
-                        </h3>
-                        <p className="text-sm text-gray-600">Suggested join points:</p>
-                      </div>
-                    </div>
-                    
-                    <div className="space-y-2">
-                      {suggestion.suggested_joins.map((join, joinIdx) => (
-                        <div key={joinIdx} className="bg-gray-50 p-3 rounded flex items-center justify-between">
-                          <div>
-                            <span className="font-medium">{join.column1}</span>
-                            <span className="text-gray-400 mx-2">↔</span>
-                            <span className="font-medium">{join.column2}</span>
-                          </div>
-                          <div className={`px-2 py-1 rounded text-xs font-medium ${
-                            join.confidence === 'high' 
-                              ? 'bg-green-100 text-green-800' 
-                              : 'bg-yellow-100 text-yellow-800'
-                          }`}>
-                            {join.confidence} confidence
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+        {/* Available Sheets */}
+        {sheets.length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <h2 className="text-xl font-semibold text-gray-900 mb-4">Available Sheets ({sheets.length})</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {sheets.map((sheet) => (
+                <div key={sheet.id} className="border border-gray-200 rounded-lg p-4 hover:border-blue-300 transition-colors">
+                  <div className="flex items-center gap-3 mb-2">
+                    <Database size={16} className="text-blue-600" />
+                    <h3 className="font-medium text-gray-900 truncate">{sheet.title}</h3>
                   </div>
-                ))}
-              </div>
-            )}
-            
-            <div className="flex justify-between pt-6">
-              <button
-                onClick={() => setStep(1)}
-                className="text-gray-600 hover:text-gray-700 flex items-center gap-2"
-              >
-                <ArrowLeft size={20} />
-                Back
-              </button>
-              <button
-                onClick={() => setStep(3)}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-semibold flex items-center gap-2"
-              >
-                Continue
-                <ArrowRight size={20} />
-              </button>
+                  <div className="text-sm text-gray-600">
+                    {sheet.total_rows.toLocaleString()} rows • {sheet.columns.length} columns
+                  </div>
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {sheet.columns.slice(0, 3).map((col, idx) => (
+                      <span key={idx} className="text-xs bg-gray-100 px-2 py-1 rounded">
+                        {col}
+                      </span>
+                    ))}
+                    {sheet.columns.length > 3 && (
+                      <span className="text-xs text-gray-500">+{sheet.columns.length - 3}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}
+      </div>
 
-        {/* Step 3: Create Project */}
-        {step === 3 && (
-          <div className="bg-white rounded-xl shadow-sm border p-8">
-            <h2 className="text-xl font-semibold text-gray-900 mb-6">Step 3: Create Your Transformation Project</h2>
+      {/* Create Project Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+              <Zap className="text-green-600" size={20} />
+              Create Transform Project
+            </h3>
             
-            <div className="space-y-6">
+            <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
                   Project Name
                 </label>
                 <input
                   type="text"
-                  value={projectName}
-                  onChange={(e) => setProjectName(e.target.value)}
-                  placeholder="e.g. Sales & Customer Data Analysis"
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  placeholder="e.g., Sales Data Analysis, Customer Segmentation"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                 />
               </div>
 
-              <div className="bg-blue-50 p-4 rounded-lg">
-                <h3 className="font-medium text-blue-900 mb-2">Selected Sheets:</h3>
-                <div className="space-y-2">
-                  {selectedSheets.map(sheetId => {
-                    const sheet = sheets.find(s => s.id === sheetId)
-                    return sheet ? (
-                      <div key={sheetId} className="flex items-center gap-3">
-                        <div className="w-2 h-2 bg-blue-600 rounded-full"></div>
-                        <span className="font-medium">{sheet.title}</span>
-                        <span className="text-sm text-blue-600">({sheet.total_rows} rows)</span>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Description (Optional)
+                </label>
+                <textarea
+                  value={newProjectDescription}
+                  onChange={(e) => setNewProjectDescription(e.target.value)}
+                  placeholder="Describe what this transformation project will accomplish..."
+                  rows={2}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Select Sheets to Include
+                </label>
+                <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
+                  {sheets.map((sheet) => (
+                    <div
+                      key={sheet.id}
+                      onClick={() => handleSheetSelection(sheet.id)}
+                      className={`p-3 cursor-pointer border-b border-gray-100 last:border-b-0 transition-colors ${
+                        selectedSheets.includes(sheet.id)
+                          ? 'bg-green-50 border-green-200'
+                          : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`w-4 h-4 rounded border-2 flex items-center justify-center ${
+                          selectedSheets.includes(sheet.id)
+                            ? 'border-green-500 bg-green-500'
+                            : 'border-gray-300'
+                        }`}>
+                          {selectedSheets.includes(sheet.id) && (
+                            <CheckCircle className="text-white" size={12} />
+                          )}
+                        </div>
+                        <div className="flex-1">
+                          <div className="font-medium text-gray-900">{sheet.title}</div>
+                          <div className="text-sm text-gray-500">
+                            {sheet.total_rows} rows, {sheet.columns.length} columns
+                          </div>
+                        </div>
                       </div>
-                    ) : null
-                  })}
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              <div className="bg-green-50 p-4 rounded-lg">
-                <div className="flex items-center gap-2 mb-2">
-                  <Zap className="text-green-600" size={20} />
-                  <h3 className="font-medium text-green-900">What's Next?</h3>
+              {selectedSheets.length === 0 && (
+                <div className="text-sm text-amber-600 bg-amber-50 p-2 rounded">
+                  Please select at least one sheet to include in your project.
                 </div>
-                <p className="text-sm text-green-800">
-                  After creating your project, you'll be able to:
-                </p>
-                <ul className="text-sm text-green-700 mt-2 space-y-1">
-                  <li>• Join your sheets on common columns</li>
-                  <li>• Clean and standardize data formats</li>
-                  <li>• Handle missing values and duplicates</li>
-                  <li>• Create charts from your combined dataset</li>
-                </ul>
-              </div>
+              )}
             </div>
-            
-            <div className="flex justify-between pt-6">
+
+            <div className="flex justify-end gap-2 mt-6">
               <button
-                onClick={() => setStep(2)}
-                className="text-gray-600 hover:text-gray-700 flex items-center gap-2"
+                onClick={() => {
+                  setShowCreateModal(false)
+                  setNewProjectName('')
+                  setNewProjectDescription('')
+                  setSelectedSheets([])
+                }}
+                className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium transition-colors"
               >
-                <ArrowLeft size={20} />
-                Back
+                Cancel
               </button>
               <button
                 onClick={handleCreateProject}
-                disabled={!projectName.trim()}
-                className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white px-6 py-3 rounded-lg font-semibold flex items-center gap-2"
+                disabled={!newProjectName.trim() || selectedSheets.length === 0 || creating}
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white rounded-lg font-medium transition-colors"
               >
-                Create Project
-                <ArrowRight size={20} />
+                {creating ? 'Creating...' : 'Create & Open Canvas'}
               </button>
             </div>
           </div>
-        )}
-      </main>
-    </div>
+        </div>
+      )}
+    </DashboardLayout>
   )
 }

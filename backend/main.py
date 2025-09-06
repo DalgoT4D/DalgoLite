@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -5,7 +8,6 @@ import os
 import json
 import re
 import pandas as pd
-from dotenv import load_dotenv
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -13,16 +15,16 @@ from googleapiclient.discovery import build
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from database import create_tables, get_db, SheetRepository, ChartRepository, TransformationProjectRepository, ConnectedSheet, SavedChart, TransformationProject, TransformedDataWarehouse, PipelineExecutionHistory, engine
+from database import create_tables, get_db, SheetRepository, ChartRepository, TransformationProjectRepository, JoinRepository, ConnectedSheet, SavedChart, TransformationProject, TransformedDataWarehouse, PipelineExecutionHistory, AITransformationStep, JoinOperation, CanvasNode, CanvasConnection, engine
 from pydantic import BaseModel
 import hashlib
 import asyncio
 import sqlite3
-load_dotenv()
 
 from llm_service import llm_service
 from data_context import DataContextGenerator
 from chart_service import ChartCreationService, get_chart_tools
+from ai_transformation_service import ai_service
 
 # Create database tables
 create_tables()
@@ -73,16 +75,50 @@ class ProjectCreateRequest(BaseModel):
     name: str
     description: Optional[str] = ""
     sheet_ids: List[int]
-    mode: str = 'simple'
 
 class JoinAnalysisRequest(BaseModel):
     sheet_ids: List[int]
+
+class JoinKeyPair(BaseModel):
+    left: str
+    right: str
+
+class JoinCreateRequest(BaseModel):
+    project_id: int
+    name: str
+    left_table_id: int
+    right_table_id: int
+    left_table_type: str  # 'sheet' or 'transformation'
+    right_table_type: str  # 'sheet' or 'transformation'
+    join_type: str  # 'inner', 'left', 'right', 'full'
+    join_keys: List[JoinKeyPair]
+    canvas_position: Dict[str, int]
 
 class ChatRequest(BaseModel):
     message: str
     chart_id: Optional[int] = None
     sheet_id: Optional[int] = None
     project_id: Optional[int] = None
+
+class AITransformationRequest(BaseModel):
+    project_id: int
+    step_name: str
+    user_prompt: str
+    output_table_name: Optional[str] = None  # Custom output table name
+    upstream_step_ids: Optional[List[int]] = []
+    upstream_sheet_ids: Optional[List[int]] = []
+    canvas_position: Optional[Dict[str, float]] = {"x": 0, "y": 0}
+
+class TransformationStepUpdateRequest(BaseModel):
+    step_name: Optional[str] = None
+    user_prompt: Optional[str] = None
+    upstream_step_ids: Optional[List[int]] = None
+    upstream_sheet_ids: Optional[List[int]] = None
+    canvas_position: Optional[Dict[str, float]] = None
+
+class CanvasLayoutUpdateRequest(BaseModel):
+    nodes: List[Dict[str, Any]]
+    connections: List[Dict[str, Any]]
 
 def extract_spreadsheet_id(input_str: str) -> str:
     """
@@ -919,7 +955,6 @@ async def get_projects(db: Session = Depends(get_db)):
                     "id": project.id,
                     "name": project.name,
                     "description": project.description,
-                    "mode": project.mode,
                     "sheet_ids": project.sheet_ids,
                     "pipeline_status": project.pipeline_status,
                     "last_pipeline_run": project.last_pipeline_run.isoformat() if project.last_pipeline_run else None,
@@ -953,15 +988,13 @@ async def create_project(project_request: ProjectCreateRequest, db: Session = De
         project = project_repo.create_project(
             name=project_request.name,
             description=project_request.description,
-            sheet_ids=project_request.sheet_ids,
-            mode=project_request.mode
+            sheet_ids=project_request.sheet_ids
         )
         
         return {
             "id": project.id,
             "name": project.name,
             "description": project.description,
-            "mode": project.mode,
             "sheet_ids": project.sheet_ids,
             "created_at": project.created_at.isoformat()
         }
@@ -987,7 +1020,6 @@ async def get_project(project_id: int, db: Session = Depends(get_db)):
             "id": project.id,
             "name": project.name,
             "description": project.description,
-            "mode": project.mode,
             "sheet_ids": project.sheet_ids,
             "join_config": project.join_config,
             "transformations": project.transformations,
@@ -995,6 +1027,7 @@ async def get_project(project_id: int, db: Session = Depends(get_db)):
             "last_pipeline_run": project.last_pipeline_run.isoformat() if project.last_pipeline_run else None,
             "schedule_config": project.schedule_config,
             "warehouse_table_name": project.warehouse_table_name,
+            "canvas_layout": project.canvas_layout,
             "created_at": project.created_at.isoformat(),
             "updated_at": project.updated_at.isoformat()
         }
@@ -1152,34 +1185,7 @@ async def preview_join(project_id: int, join_config: Dict[str, Any], db: Session
         if len(dataframes) < 2:
             raise HTTPException(status_code=400, detail="Need at least 2 sheets to join")
         
-        # Handle different modes
-        mode = join_config.get('mode', project.mode)
-        
-        if mode == 'expert':
-            # Expert mode: Execute custom SQL query
-            custom_query = join_config.get('custom_query', '')
-            if not custom_query:
-                raise HTTPException(status_code=400, detail="Custom query required for expert mode")
-            
-            # For now, return placeholder data for expert mode
-            # TODO: Implement SQL query execution engine
-            return {
-                "total_rows": 100,
-                "preview_data": [
-                    ["Result from custom query"],
-                    ["Custom SQL execution not yet implemented"],
-                    ["Please use Simple or Advanced mode"]
-                ],
-                "columns": ["Custom Query Result"],
-                "join_stats": {
-                    "left_rows": 0,
-                    "right_rows": 0,
-                    "joined_rows": 100,
-                    "join_type": "custom_sql"
-                }
-            }
-        
-        # Advanced and Simple mode: Perform join based on configuration
+        # Perform join based on configuration
         join_type = join_config.get('join_type', 'inner')
         left_sheet_id = join_config.get('left_sheet_id')
         right_sheet_id = join_config.get('right_sheet_id') 
@@ -1252,6 +1258,284 @@ async def preview_join(project_id: int, join_config: Dict[str, Any], db: Session
                 raise HTTPException(status_code=400, detail=f"Column data types don't match for joining. Make sure '{left_column}' and '{right_column}' contain similar data types.")
             else:
                 raise HTTPException(status_code=400, detail=f"Join failed: {error_msg}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Join Operation endpoints
+@app.post("/projects/{project_id}/joins")
+async def create_join(project_id: int, request: JoinCreateRequest, db: Session = Depends(get_db)):
+    """Create a new join operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Verify project exists
+        project_repo = TransformationProjectRepository(db)
+        project = project_repo.get_project_by_id(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Validate table types and IDs
+        sheet_repo = SheetRepository(db)
+        
+        # Validate left table
+        if request.left_table_type == 'sheet':
+            left_table = sheet_repo.get_sheet_by_id(request.left_table_id)
+            if not left_table:
+                raise HTTPException(status_code=404, detail="Left table (sheet) not found")
+        elif request.left_table_type == 'transformation':
+            # Validate transformation step exists and is completed
+            left_step = db.query(AITransformationStep).filter(
+                AITransformationStep.id == request.left_table_id,
+                AITransformationStep.project_id == project_id,
+                AITransformationStep.status == 'completed'
+            ).first()
+            if not left_step:
+                raise HTTPException(status_code=404, detail="Left table (transformation step) not found or not completed")
+        
+        # Validate right table  
+        if request.right_table_type == 'sheet':
+            right_table = sheet_repo.get_sheet_by_id(request.right_table_id)
+            if not right_table:
+                raise HTTPException(status_code=404, detail="Right table (sheet) not found")
+        elif request.right_table_type == 'transformation':
+            # Validate transformation step exists and is completed
+            right_step = db.query(AITransformationStep).filter(
+                AITransformationStep.id == request.right_table_id,
+                AITransformationStep.project_id == project_id,
+                AITransformationStep.status == 'completed'
+            ).first()
+            if not right_step:
+                raise HTTPException(status_code=404, detail="Right table (transformation step) not found or not completed")
+        
+        # Create join operation
+        join_repo = JoinRepository(db)
+        join_keys = [{"left": key.left, "right": key.right} for key in request.join_keys]
+        
+        join_op = join_repo.create_join(
+            project_id=project_id,
+            name=request.name,
+            left_table_id=request.left_table_id,
+            right_table_id=request.right_table_id,
+            left_table_type=request.left_table_type,
+            right_table_type=request.right_table_type,
+            join_type=request.join_type,
+            join_keys=join_keys,
+            canvas_position=request.canvas_position
+        )
+        
+        return {
+            "join_id": join_op.id,
+            "status": "created",
+            "message": "Join operation created successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/projects/{project_id}/joins")
+async def get_project_joins(project_id: int, db: Session = Depends(get_db)):
+    """Get all join operations for a project"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Verify project exists
+        project_repo = TransformationProjectRepository(db)
+        project = project_repo.get_project_by_id(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        join_repo = JoinRepository(db)
+        joins = join_repo.get_joins_by_project(project_id)
+        
+        return {
+            "joins": [
+                {
+                    "id": join.id,
+                    "name": join.name,
+                    "left_table_id": join.left_table_id,
+                    "right_table_id": join.right_table_id,
+                    "left_table_type": join.left_table_type,
+                    "right_table_type": join.right_table_type,
+                    "join_type": join.join_type,
+                    "join_keys": join.join_keys,
+                    "status": join.status,
+                    "error_message": join.error_message,
+                    "output_table_name": join.output_table_name,
+                    "output_columns": join.output_columns,
+                    "canvas_position": join.canvas_position,
+                    "execution_time_ms": join.execution_time_ms,
+                    "created_at": join.created_at.isoformat(),
+                    "updated_at": join.updated_at.isoformat()
+                }
+                for join in joins
+            ]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/projects/{project_id}/joins/{join_id}/execute")
+async def execute_join(project_id: int, join_id: int, db: Session = Depends(get_db)):
+    """Execute a join operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        import time
+        start_time = time.time()
+        
+        join_repo = JoinRepository(db)
+        join_op = join_repo.get_join_by_id(join_id)
+        
+        if not join_op or join_op.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Join operation not found")
+        
+        # Get data from both tables
+        left_df = None
+        right_df = None
+        
+        sheet_repo = SheetRepository(db)
+        
+        # Get left table data
+        if join_op.left_table_type == 'sheet':
+            left_sheet = sheet_repo.get_sheet_by_id(join_op.left_table_id)
+            if not left_sheet:
+                raise HTTPException(status_code=404, detail="Left sheet not found")
+            left_df = await get_sheet_dataframe(left_sheet.spreadsheet_id, left_sheet.sheet_name)
+        elif join_op.left_table_type == 'transformation':
+            # Get transformation output data
+            left_table_name = f"transform_step_{join_op.left_table_id}"
+            with engine.connect() as conn:
+                try:
+                    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"), 
+                                        {"pattern": f"%{left_table_name}%"})
+                    table_names = [row[0] for row in result.fetchall()]
+                    if table_names:
+                        left_df = pd.read_sql_table(table_names[0], conn)
+                    else:
+                        raise HTTPException(status_code=404, detail="Left transformation output table not found")
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"Error reading left transformation data: {str(e)}")
+        
+        # Get right table data
+        if join_op.right_table_type == 'sheet':
+            right_sheet = sheet_repo.get_sheet_by_id(join_op.right_table_id)
+            if not right_sheet:
+                raise HTTPException(status_code=404, detail="Right sheet not found")
+            right_df = await get_sheet_dataframe(right_sheet.spreadsheet_id, right_sheet.sheet_name)
+        elif join_op.right_table_type == 'transformation':
+            # Get transformation output data
+            right_table_name = f"transform_step_{join_op.right_table_id}"
+            with engine.connect() as conn:
+                try:
+                    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"), 
+                                        {"pattern": f"%{right_table_name}%"})
+                    table_names = [row[0] for row in result.fetchall()]
+                    if table_names:
+                        right_df = pd.read_sql_table(table_names[0], conn)
+                    else:
+                        raise HTTPException(status_code=404, detail="Right transformation output table not found")
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"Error reading right transformation data: {str(e)}")
+        
+        if left_df is None or right_df is None:
+            raise HTTPException(status_code=500, detail="Failed to load data for join")
+        
+        # Perform the join
+        try:
+            join_keys = join_op.join_keys
+            left_on = [key['left'] for key in join_keys]
+            right_on = [key['right'] for key in join_keys]
+            
+            # Map join types
+            how_mapping = {
+                'inner': 'inner',
+                'left': 'left',
+                'right': 'right',
+                'full': 'outer'
+            }
+            
+            result_df = pd.merge(
+                left_df, 
+                right_df, 
+                left_on=left_on, 
+                right_on=right_on, 
+                how=how_mapping.get(join_op.join_type, 'inner'),
+                suffixes=('_left', '_right')
+            )
+            
+            # Save result to database
+            result_df.to_sql(join_op.output_table_name, engine, if_exists='replace', index=False)
+            
+            # Update join operation status
+            execution_time = int((time.time() - start_time) * 1000)
+            join_repo.update_join_status(
+                join_id=join_id,
+                status='completed',
+                output_columns=result_df.columns.tolist(),
+                execution_time_ms=execution_time
+            )
+            
+            return {
+                "status": "completed",
+                "message": "Join executed successfully",
+                "output_table_name": join_op.output_table_name,
+                "output_columns": result_df.columns.tolist(),
+                "row_count": len(result_df),
+                "execution_time_ms": execution_time
+            }
+            
+        except Exception as join_error:
+            # Update join operation with error
+            join_repo.update_join_status(
+                join_id=join_id,
+                status='failed',
+                error_message=str(join_error)
+            )
+            raise HTTPException(status_code=400, detail=f"Join execution failed: {str(join_error)}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/projects/{project_id}/joins/{join_id}")
+async def delete_join(project_id: int, join_id: int, db: Session = Depends(get_db)):
+    """Delete a join operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        join_repo = JoinRepository(db)
+        join_op = join_repo.get_join_by_id(join_id)
+        
+        if not join_op or join_op.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Join operation not found")
+        
+        # Delete output table if it exists
+        if join_op.output_table_name:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f"DROP TABLE IF EXISTS {join_op.output_table_name}"))
+                    conn.commit()
+            except Exception:
+                pass  # Ignore errors dropping table
+        
+        # Delete join operation
+        success = join_repo.delete_join(join_id)
+        if success:
+            return {"status": "deleted", "message": "Join operation deleted successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="Join operation not found")
         
     except HTTPException:
         raise
@@ -1390,7 +1674,6 @@ class ProjectChartCreateRequest(BaseModel):
 class ProjectUpdateRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    mode: Optional[str] = None
     sheet_ids: Optional[List[int]] = None
     join_config: Optional[Dict[str, Any]] = None
     transformations: Optional[List[Dict[str, Any]]] = None
@@ -1422,7 +1705,6 @@ async def update_project(project_id: int, update_request: ProjectUpdateRequest, 
             "id": updated_project.id,
             "name": updated_project.name,
             "description": updated_project.description,
-            "mode": updated_project.mode,
             "sheet_ids": updated_project.sheet_ids,
             "join_config": updated_project.join_config,
             "transformations": updated_project.transformations,
@@ -1438,6 +1720,39 @@ async def update_project(project_id: int, update_request: ProjectUpdateRequest, 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.put("/projects/{project_id}/canvas-layout")
+async def update_project_canvas_layout(
+    project_id: int, 
+    request: CanvasLayoutUpdateRequest, 
+    db: Session = Depends(get_db)
+):
+    """Update the canvas layout (node positions and connections) for a project"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        project_repo = TransformationProjectRepository(db)
+        project = project_repo.get_project_by_id(project_id)
+        
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Update the canvas layout
+        layout_data = {
+            "nodes": request.nodes,
+            "connections": request.connections
+        }
+        
+        project_repo.update_project(project_id, canvas_layout=layout_data)
+        
+        return {"message": "Canvas layout updated successfully"}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error updating canvas layout: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update canvas layout: {str(e)}")
+
 @app.delete("/projects/{project_id}")
 async def delete_project(project_id: int, db: Session = Depends(get_db)):
     """Delete a transformation project and all associated data"""
@@ -1450,6 +1765,13 @@ async def delete_project(project_id: int, db: Session = Depends(get_db)):
         
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Delete AI transformation steps first
+        ai_steps = db.query(AITransformationStep).filter(
+            AITransformationStep.project_id == project_id
+        ).all()
+        for step in ai_steps:
+            db.delete(step)
         
         # Delete project charts (cascade handled by database relationship)
         chart_repo = ChartRepository(db)
@@ -1692,13 +2014,7 @@ async def process_transformation(project: TransformationProject, sheet_repo: She
         if len(dataframes) < 2:
             return None
         
-        # Apply transformation based on mode
-        if project.mode == 'expert':
-            # TODO: Implement custom SQL execution
-            # For now, return None to indicate not implemented
-            return None
-        
-        # Simple and Advanced mode transformations
+        # Apply transformations
         join_config = project.join_config or {}
         
         # Get the sheets to join
@@ -1726,8 +2042,8 @@ async def process_transformation(project: TransformationProject, sheet_repo: She
             suffixes=('_left', '_right')
         )
         
-        # Apply transformations if in advanced mode
-        if project.mode == 'advanced' and project.transformations:
+        # Apply transformations if available
+        if project.transformations:
             for transform in project.transformations:
                 transform_type = transform.get('type')
                 if transform_type == 'remove_duplicates':
@@ -1848,6 +2164,333 @@ async def create_project_chart(project_id: int, chart_request: ProjectChartCreat
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/projects/{project_id}/execute-all")
+async def execute_all_transformations(project_id: int, db: Session = Depends(get_db)):
+    """Execute all transformation steps in a project in order"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        project_repo = TransformationProjectRepository(db)
+        project = project_repo.get_project_by_id(project_id)
+        
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Get all transformation steps for this project, ordered by execution_order
+        steps = db.query(AITransformationStep).filter(
+            AITransformationStep.project_id == project_id
+        ).order_by(AITransformationStep.execution_order.asc()).all()
+        
+        if not steps:
+            return {"message": "No transformation steps found", "executed_steps": []}
+        
+        executed_steps = []
+        failed_steps = []
+        
+        # Import pandas at function level to avoid scope issues
+        import pandas as pd
+        from datetime import datetime, timezone
+        import time
+        
+        for step in steps:
+            try:
+                # Execute each step (reuse the existing execute logic)
+                start_time = time.time()
+                
+                step.status = 'running'
+                step.error_message = None
+                db.commit()
+                
+                # Get upstream data (from sheets and previous transformations)
+                sheet_data = {}
+                
+                # Add original sheet data
+                if step.upstream_sheet_ids:
+                    sheet_repo = SheetRepository(db)
+                    for sheet_id in step.upstream_sheet_ids:
+                        sheet = sheet_repo.get_sheet_by_id(sheet_id)
+                        if sheet and sheet.sample_data and sheet.columns:
+                            df_data = {}
+                            for i, col in enumerate(sheet.columns):
+                                column_data = []
+                                for row in sheet.sample_data:
+                                    if i < len(row):
+                                        column_data.append(row[i])
+                                    else:
+                                        column_data.append(None)
+                                df_data[col] = column_data
+                            sheet_data[f'sheet_{sheet_id}'] = pd.DataFrame(df_data)
+                
+                # Add previous transformation results
+                if step.upstream_step_ids:
+                    for upstream_step_id in step.upstream_step_ids:
+                        upstream_step = db.query(AITransformationStep).filter(
+                            AITransformationStep.id == upstream_step_id,
+                            AITransformationStep.status == 'completed'
+                        ).first()
+                        
+                        if upstream_step and upstream_step.code_explanation:
+                            # Extract table name
+                            table_name = None
+                            if "Output table:" in upstream_step.code_explanation:
+                                lines = upstream_step.code_explanation.split('\n')
+                                for line in lines:
+                                    if line.startswith("Output table:"):
+                                        table_name = line.split(":", 1)[1].strip()
+                                        break
+                            
+                            if table_name:
+                                try:
+                                    upstream_df = pd.read_sql_table(table_name, engine)
+                                    sheet_data[f'transform_{upstream_step_id}'] = upstream_df
+                                except Exception as e:
+                                    print(f"Could not load upstream table {table_name}: {e}")
+                
+                # Set the main df for transformation
+                df = None
+                if sheet_data:
+                    df = list(sheet_data.values())[0]
+                else:
+                    df = pd.DataFrame({'col1': [1, 2, 3], 'col2': ['a', 'b', 'c']})
+                
+                # Execute the transformation code
+                exec_globals = {
+                    'df': df, 
+                    'pd': pd, 
+                    'numpy': __import__('numpy'),
+                    **sheet_data
+                }
+                
+                exec(step.generated_code, exec_globals)
+                result_df = exec_globals.get('df', df)
+                
+                # Create table name and store results
+                table_name = f"transform_step_{step.id}_{step.step_name.lower().replace(' ', '_').replace('-', '_')}"
+                import re
+                table_name = re.sub(r'[^\w]', '_', table_name)
+                
+                if result_df is not None and not result_df.empty:
+                    store_in_warehouse(result_df, table_name, step.project_id, db)
+                
+                # Update step with success
+                execution_time_ms = int((time.time() - start_time) * 1000)
+                step.status = 'completed'
+                step.last_executed = datetime.now(timezone.utc)
+                step.execution_time_ms = execution_time_ms
+                step.output_columns = result_df.columns.tolist() if result_df is not None else []
+                step.code_explanation = f"Output table: {table_name}\n\n{step.code_explanation or ''}"
+                
+                db.commit()
+                
+                executed_steps.append({
+                    "step_id": step.id,
+                    "step_name": step.step_name,
+                    "status": "completed",
+                    "execution_time_ms": execution_time_ms,
+                    "output_table": table_name,
+                    "output_shape": result_df.shape if result_df is not None else None
+                })
+                
+            except Exception as exec_error:
+                execution_time_ms = int((time.time() - start_time) * 1000)
+                step.status = 'failed'
+                step.error_message = str(exec_error)
+                step.last_executed = datetime.now(timezone.utc)
+                step.execution_time_ms = execution_time_ms
+                db.commit()
+                
+                failed_steps.append({
+                    "step_id": step.id,
+                    "step_name": step.step_name,
+                    "status": "failed",
+                    "error": str(exec_error),
+                    "execution_time_ms": execution_time_ms
+                })
+        
+        return {
+            "message": f"Executed {len(executed_steps)} steps successfully, {len(failed_steps)} failed",
+            "executed_steps": executed_steps,
+            "failed_steps": failed_steps,
+            "total_steps": len(steps)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/projects/{project_id}/data-sources")
+async def get_project_data_sources(project_id: int, db: Session = Depends(get_db)):
+    """Get available data sources (original sheets + transformed tables) for a project"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        project_repo = TransformationProjectRepository(db)
+        project = project_repo.get_project_by_id(project_id)
+        
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        data_sources = []
+        
+        # Add original sheets as data sources
+        sheet_repo = SheetRepository(db)
+        for sheet_id in project.sheet_ids:
+            sheet = sheet_repo.get_sheet_by_id(sheet_id)
+            if sheet:
+                data_sources.append({
+                    "id": f"sheet_{sheet_id}",
+                    "name": sheet.title,
+                    "type": "sheet",
+                    "source_type": "original",
+                    "columns": sheet.columns,
+                    "row_count": sheet.total_rows
+                })
+        
+        # Add transformed tables as data sources
+        transformation_steps = db.query(AITransformationStep).filter(
+            AITransformationStep.project_id == project_id,
+            AITransformationStep.status == 'completed'
+        ).all()
+        
+        for step in transformation_steps:
+            # Extract table name from code_explanation (temporary approach)
+            table_name = None
+            if step.code_explanation and "Output table:" in step.code_explanation:
+                lines = step.code_explanation.split('\n')
+                for line in lines:
+                    if line.startswith("Output table:"):
+                        table_name = line.split(":", 1)[1].strip()
+                        break
+            
+            if table_name:
+                # Try to get table info from SQLite
+                try:
+                    import pandas as pd
+                    result = engine.execute(f"SELECT COUNT(*) as count FROM {table_name}")
+                    row_count = result.fetchone()[0]
+                    
+                    data_sources.append({
+                        "id": f"transform_{step.id}",
+                        "name": f"{step.step_name} (Transformed)",
+                        "type": "transformed_table",
+                        "source_type": "transformed",
+                        "table_name": table_name,
+                        "columns": step.output_columns or [],
+                        "row_count": row_count,
+                        "step_id": step.id
+                    })
+                except Exception as e:
+                    print(f"Could not get info for table {table_name}: {e}")
+        
+        return {"data_sources": data_sources}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/projects/{project_id}/table-data/{table_id}")
+async def get_table_data(project_id: int, table_id: str, db: Session = Depends(get_db)):
+    """Get data from a specific table (sheet or transformed) for charting"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        project_repo = TransformationProjectRepository(db)
+        project = project_repo.get_project_by_id(project_id)
+        
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        import pandas as pd
+        
+        if table_id.startswith("sheet_"):
+            # Get data from original sheet
+            sheet_id = int(table_id.replace("sheet_", ""))
+            sheet_repo = SheetRepository(db)
+            sheet = sheet_repo.get_sheet_by_id(sheet_id)
+            
+            if not sheet:
+                raise HTTPException(status_code=404, detail="Sheet not found")
+            
+            # Convert sheet data to DataFrame format
+            data = []
+            for row in sheet.sample_data:
+                row_dict = {}
+                for i, col in enumerate(sheet.columns):
+                    row_dict[col] = row[i] if i < len(row) else None
+                data.append(row_dict)
+            
+            return {
+                "data": data,
+                "columns": sheet.columns,
+                "row_count": len(data),
+                "source_type": "sheet"
+            }
+            
+        elif table_id.startswith("transform_"):
+            # Get data from transformed table
+            step_id = int(table_id.replace("transform_", ""))
+            step = db.query(AITransformationStep).filter(
+                AITransformationStep.id == step_id,
+                AITransformationStep.project_id == project_id,
+                AITransformationStep.status == 'completed'
+            ).first()
+            
+            if not step:
+                raise HTTPException(status_code=404, detail="Transformation step not found")
+            
+            # Generate the correct table name that matches the storage pattern
+            if step.output_table_name:
+                # Use custom table name if provided
+                import re
+                table_name = re.sub(r'[^\w]', '_', step.output_table_name.lower())
+            else:
+                # Use default pattern - match the exact same logic as storage
+                step_name_clean = step.step_name.lower().replace(' ', '_').replace('-', '_')
+                table_name = f"transform_step_{step_id}_{step_name_clean}"
+                # Apply the same regex cleaning as storage
+                import re
+                table_name = re.sub(r'[^\w]', '_', table_name)
+            
+            # Read data from SQLite table
+            try:
+                df = pd.read_sql_table(table_name, engine)
+            except Exception:
+                # If the expected table name doesn't work, try to find any table with step_id
+                try:
+                    with engine.connect() as conn:
+                        result = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE ?", (f"%transform_step_{step_id}%",))
+                        tables = result.fetchall()
+                        if tables:
+                            table_name = tables[0][0]  # Use the first matching table
+                            df = pd.read_sql_table(table_name, engine)
+                        else:
+                            raise HTTPException(status_code=404, detail="Transformation output table not found")
+                except Exception as e:
+                    raise HTTPException(status_code=404, detail=f"Error reading transformation data: {str(e)}")
+                data = df.to_dict('records')
+                return {
+                    "data": data,
+                    "columns": df.columns.tolist(),
+                    "row_count": len(data),
+                    "source_type": "transformed",
+                    "table_name": table_name
+                }
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Could not read table data: {str(e)}")
+        
+        else:
+            raise HTTPException(status_code=400, detail="Invalid table ID format")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/projects/{project_id}/data")
 async def get_project_data(project_id: int, db: Session = Depends(get_db)):
     """Get transformed data from warehouse for a project"""
@@ -1946,6 +2589,612 @@ async def get_project_pipeline_history(project_id: int, limit: int = 20, db: Ses
             "history": formatted_history,
             "total_executions": len(formatted_history)
         }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# AI Transformation Endpoints
+@app.post("/projects/{project_id}/ai-transformations")
+async def create_ai_transformation_step(
+    project_id: int, 
+    request: AITransformationRequest, 
+    db: Session = Depends(get_db)
+):
+    """Create a new AI-powered transformation step"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Verify project exists
+        project_repo = TransformationProjectRepository(db)
+        project = project_repo.get_project_by_id(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Get sample data from upstream sources for AI context
+        sample_data = []
+        columns = []
+        
+        # If upstream sheets are specified, get their data
+        if request.upstream_sheet_ids:
+            sheet_repo = SheetRepository(db)
+            for sheet_id in request.upstream_sheet_ids:
+                sheet = sheet_repo.get_sheet_by_id(sheet_id)
+                if sheet and sheet.sample_data:
+                    sample_data.extend(sheet.sample_data)
+                    if sheet.columns:
+                        columns.extend(sheet.columns)
+        
+        # Remove duplicates and limit sample data
+        if sample_data:
+            sample_data = sample_data[:10]  # Limit to 10 rows
+        columns = list(set(columns))  # Remove duplicates
+        
+        # Generate transformation code using AI
+        ai_result = await ai_service.generate_transformation_code(
+            user_prompt=request.user_prompt,
+            sample_data=sample_data,
+            columns=columns
+        )
+        
+        if not ai_result.get('success'):
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Failed to generate transformation code: {ai_result.get('error', 'Unknown error')}"
+            )
+        
+        # Create the transformation step
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        
+        transformation_step = AITransformationStep(
+            project_id=project_id,
+            step_name=request.step_name,
+            user_prompt=request.user_prompt,
+            output_table_name=request.output_table_name,
+            generated_code=ai_result['code'],
+            code_summary=ai_result['summary'],
+            code_explanation=ai_result['explanation'],
+            input_columns=ai_result['input_columns'],
+            output_columns=ai_result['estimated_output_columns'],
+            upstream_step_ids=request.upstream_step_ids or [],
+            upstream_sheet_ids=request.upstream_sheet_ids or [],
+            canvas_position=request.canvas_position or {"x": 0, "y": 0},
+            execution_order=0,  # Will be calculated based on dependencies
+            status='draft',
+            created_at=now,
+            updated_at=now
+        )
+        
+        db.add(transformation_step)
+        db.commit()
+        db.refresh(transformation_step)
+        
+        return {
+            "id": transformation_step.id,
+            "step_name": transformation_step.step_name,
+            "user_prompt": transformation_step.user_prompt,
+            "generated_code": transformation_step.generated_code,
+            "code_summary": transformation_step.code_summary,
+            "code_explanation": transformation_step.code_explanation,
+            "status": transformation_step.status,
+            "canvas_position": transformation_step.canvas_position,
+            "created_at": transformation_step.created_at.isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/projects/{project_id}/ai-transformations")
+async def get_project_transformation_steps(project_id: int, db: Session = Depends(get_db)):
+    """Get all AI transformation steps for a project"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get all transformation steps for the project
+        steps = db.query(AITransformationStep).filter(
+            AITransformationStep.project_id == project_id
+        ).order_by(AITransformationStep.execution_order, AITransformationStep.created_at).all()
+        
+        return {
+            "steps": [
+                {
+                    "id": step.id,
+                    "step_name": step.step_name,
+                    "user_prompt": step.user_prompt,
+                    "generated_code": step.generated_code,
+                    "code_summary": step.code_summary,
+                    "code_explanation": step.code_explanation,
+                    "input_columns": step.input_columns,
+                    "output_columns": step.output_columns,
+                    "upstream_step_ids": step.upstream_step_ids,
+                    "upstream_sheet_ids": step.upstream_sheet_ids,
+                    "canvas_position": step.canvas_position,
+                    "execution_order": step.execution_order,
+                    "status": step.status,
+                    "error_message": step.error_message,
+                    "last_executed": step.last_executed.isoformat() if step.last_executed else None,
+                    "execution_time_ms": step.execution_time_ms,
+                    "created_at": step.created_at.isoformat(),
+                    "updated_at": step.updated_at.isoformat()
+                }
+                for step in steps
+            ]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/ai-transformations/{step_id}")
+async def update_transformation_step(
+    step_id: int, 
+    request: TransformationStepUpdateRequest, 
+    db: Session = Depends(get_db)
+):
+    """Update an AI transformation step"""
+    from datetime import datetime, timezone
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get the transformation step
+        step = db.query(AITransformationStep).filter(
+            AITransformationStep.id == step_id
+        ).first()
+        
+        if not step:
+            raise HTTPException(status_code=404, detail="Transformation step not found")
+        
+        # Update fields if provided
+        if request.step_name is not None:
+            step.step_name = request.step_name
+        if request.user_prompt is not None:
+            step.user_prompt = request.user_prompt
+            # Regenerate code if prompt changed
+            # TODO: Implement code regeneration
+        if request.upstream_step_ids is not None:
+            step.upstream_step_ids = request.upstream_step_ids
+        if request.upstream_sheet_ids is not None:
+            step.upstream_sheet_ids = request.upstream_sheet_ids
+        if request.canvas_position is not None:
+            step.canvas_position = request.canvas_position
+        
+        step.updated_at = datetime.now(timezone.utc)
+        
+        db.commit()
+        db.refresh(step)
+        
+        return {
+            "id": step.id,
+            "step_name": step.step_name,
+            "user_prompt": step.user_prompt,
+            "canvas_position": step.canvas_position,
+            "updated_at": step.updated_at.isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/ai-transformations/{step_id}")
+async def delete_transformation_step(step_id: int, db: Session = Depends(get_db)):
+    """Delete an AI transformation step"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get the transformation step
+        step = db.query(AITransformationStep).filter(
+            AITransformationStep.id == step_id
+        ).first()
+        
+        if not step:
+            raise HTTPException(status_code=404, detail="Transformation step not found")
+        
+        db.delete(step)
+        db.commit()
+        
+        return {"message": "Transformation step deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/ai-transformations/{step_id}/execute")
+async def execute_transformation_step(step_id: int, db: Session = Depends(get_db)):
+    """Execute a single AI transformation step"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get the transformation step
+        step = db.query(AITransformationStep).filter(
+            AITransformationStep.id == step_id
+        ).first()
+        
+        if not step:
+            raise HTTPException(status_code=404, detail="Transformation step not found")
+        
+        # Update step status to running  
+        from datetime import datetime, timezone
+        import pandas as pd
+        import time
+        start_time = time.time()
+        
+        step.status = 'running'
+        step.error_message = None
+        db.commit()
+        
+        try:
+            # Get upstream data (from sheets)
+            sheet_data = {}
+            if step.upstream_sheet_ids:
+                sheet_repo = SheetRepository(db)
+                for sheet_id in step.upstream_sheet_ids:
+                    sheet = sheet_repo.get_sheet_by_id(sheet_id)
+                    if sheet and sheet.sample_data and sheet.columns:
+                        # Create a pandas DataFrame from the sheet data
+                        df_data = {}
+                        for i, col in enumerate(sheet.columns):
+                            column_data = []
+                            for row in sheet.sample_data:
+                                if i < len(row):
+                                    column_data.append(row[i])
+                                else:
+                                    column_data.append(None)
+                            df_data[col] = column_data
+                        sheet_data[f'sheet_{sheet_id}'] = pd.DataFrame(df_data)
+            
+            # If we have sheet data, use the first one as 'df' for the transformation
+            df = None
+            if sheet_data:
+                df = list(sheet_data.values())[0]
+            else:
+                # Create a minimal test DataFrame if no upstream data
+                df = pd.DataFrame({'col1': [1, 2, 3], 'col2': ['a', 'b', 'c']})
+            
+            # Execute the generated pandas code
+            exec_globals = {
+                'df': df, 
+                'pd': pd, 
+                'numpy': __import__('numpy'),
+                **sheet_data  # Include all sheet data
+            }
+            
+            # Execute the transformation code
+            exec(step.generated_code, exec_globals)
+            
+            # Get the result DataFrame
+            result_df = exec_globals.get('df', df)
+            
+            # Create a unique table name for this transformation result
+            if step.output_table_name:
+                # Use custom table name if provided
+                import re
+                table_name = re.sub(r'[^\w]', '_', step.output_table_name.lower())
+            else:
+                # Use default pattern - match the exact same logic as retrieval
+                step_name_clean = step.step_name.lower().replace(' ', '_').replace('-', '_')
+                table_name = f"transform_step_{step_id}_{step_name_clean}"
+                # Ensure table name is valid (remove special characters)
+                import re
+                table_name = re.sub(r'[^\w]', '_', table_name)
+            
+            # Store the transformed data in the warehouse
+            if result_df is not None and not result_df.empty:
+                store_in_warehouse(result_df, table_name, step.project_id, db)
+            
+            # Update step with success status and table name
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            step.status = 'completed'
+            step.last_executed = datetime.now(timezone.utc)
+            step.execution_time_ms = execution_time_ms
+            step.output_columns = result_df.columns.tolist() if result_df is not None else []
+            
+            # Store the output table name in the step (we'll need to add this field to the database)
+            # For now, store it in the code_explanation field as a workaround
+            step.code_explanation = f"Output table: {table_name}\n\n{step.code_explanation or ''}"
+            
+            db.commit()
+            
+            return {
+                "message": "Step executed successfully",
+                "step_id": step_id,
+                "status": "completed",
+                "execution_time_ms": execution_time_ms,
+                "output_shape": result_df.shape if result_df is not None else None,
+                "output_columns": step.output_columns,
+                "output_table_name": table_name
+            }
+            
+        except Exception as exec_error:
+            # Update step with error status
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            step.status = 'failed'
+            step.error_message = str(exec_error)
+            step.last_executed = datetime.now(timezone.utc)
+            step.execution_time_ms = execution_time_ms
+            
+            db.commit()
+            
+            return {
+                "message": "Step execution failed",
+                "step_id": step_id,
+                "status": "failed",
+                "error": str(exec_error),
+                "execution_time_ms": execution_time_ms
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/sheets/{sheet_id}/data")
+async def get_sheet_data(sheet_id: int, db: Session = Depends(get_db)):
+    """Get full data from a specific sheet for viewing"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        sheet_repo = SheetRepository(db)
+        sheet = sheet_repo.get_sheet_by_id(sheet_id)
+        
+        if not sheet:
+            raise HTTPException(status_code=404, detail="Sheet not found")
+        
+        # Get full sheet data (not just sample)
+        try:
+            df = fetch_full_sheet_data(sheet)
+            
+            # Convert DataFrame to the format expected by the frontend
+            columns = df.columns.tolist()
+            data_rows = []
+            
+            # Convert DataFrame rows to list of lists, handling various data types
+            for _, row in df.iterrows():
+                row_data = []
+                for value in row:
+                    if pd.isna(value):
+                        row_data.append(None)
+                    elif isinstance(value, (int, float)):
+                        row_data.append(value)
+                    else:
+                        row_data.append(str(value))
+                data_rows.append(row_data)
+            
+            return {
+                "columns": columns,
+                "data": data_rows,
+                "total_rows": len(data_rows),
+                "table_name": sheet.title
+            }
+            
+        except Exception as e:
+            # Fallback to sample data if full data fetch fails
+            if sheet.sample_data and len(sheet.sample_data) > 1:
+                return {
+                    "columns": sheet.sample_data[0],
+                    "data": sheet.sample_data[1:],
+                    "total_rows": sheet.total_rows or len(sheet.sample_data) - 1,
+                    "table_name": sheet.title
+                }
+            else:
+                raise HTTPException(status_code=500, detail=f"Could not load sheet data: {str(e)}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/ai-transformations/{step_id}/data")
+async def get_transformation_data(step_id: int, db: Session = Depends(get_db)):
+    """Get output data from a completed AI transformation step"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get the transformation step
+        step = db.query(AITransformationStep).filter(
+            AITransformationStep.id == step_id
+        ).first()
+        
+        if not step:
+            raise HTTPException(status_code=404, detail="Transformation step not found")
+        
+        if step.status != 'completed':
+            raise HTTPException(status_code=400, detail="Transformation step is not completed")
+        
+        # Extract table name from code_explanation (which should contain the actual stored table name)
+        table_name = None
+        if step.code_explanation:
+            lines = step.code_explanation.split('\n')
+            for line in lines:
+                if line.startswith('Output table:'):
+                    table_name = line.split(':', 2)[1].strip()
+                    print(f"DEBUG: Extracted table name from code_explanation: {table_name}")
+                    break
+        
+        # If no table name found in code_explanation, generate it using the same logic as storage
+        if not table_name:
+            if hasattr(step, 'output_table_name') and step.output_table_name:
+                # Use custom table name if provided
+                import re
+                table_name = re.sub(r'[^\w]', '_', step.output_table_name.lower())
+            else:
+                # Use default pattern - match the exact same logic as storage
+                step_name_clean = step.step_name.lower().replace(' ', '_').replace('-', '_')
+                table_name = f"transform_step_{step_id}_{step_name_clean}"
+                # Apply the same regex cleaning as storage
+                import re
+                table_name = re.sub(r'[^\w]', '_', table_name)
+        
+        # Try to read the data from the SQLite database using the same engine as storage
+        from database import engine
+        import sqlite3
+        
+        
+        try:
+            # Use the same database connection as the storage function
+            conn = engine.connect()
+            
+            print(f"DEBUG: Looking for table: {table_name} for step {step_id} (custom_name={getattr(step, 'output_table_name', None)})")
+            
+            # Check if table exists using pandas to query
+            try:
+                df = pd.read_sql_query(f"SELECT * FROM `{table_name}`", conn)
+            except Exception:
+                # If the expected table name doesn't work, try to find any table with step_id
+                try:
+                    from sqlalchemy import text
+                    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"), {"pattern": f"%transform_step_{step_id}%"})
+                    tables = result.fetchall()
+                    if tables:
+                        table_name = tables[0][0]  # Use the first matching table
+                        df = pd.read_sql_query(f"SELECT * FROM `{table_name}`", conn)
+                    else:
+                        raise HTTPException(status_code=404, detail=f"Transformation output table not found. The transformation may not have been executed successfully yet.")
+                except Exception as e:
+                    raise HTTPException(status_code=404, detail=f"Error retrieving transformation data: {str(e)}")
+            
+            conn.close()
+            
+            # Convert DataFrame to the format expected by the frontend
+            columns = df.columns.tolist()
+            data_rows = []
+            
+            # Convert DataFrame rows to list of lists, handling various data types
+            for _, row in df.iterrows():
+                row_data = []
+                for value in row:
+                    if pd.isna(value):
+                        row_data.append(None)
+                    elif isinstance(value, (int, float)):
+                        row_data.append(value)
+                    else:
+                        row_data.append(str(value))
+                data_rows.append(row_data)
+            
+            return {
+                "columns": columns,
+                "data": data_rows,
+                "total_rows": len(data_rows),
+                "table_name": table_name
+            }
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error reading transformation data: {str(e)}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/ai-transformations/{step_id}/recommendations")
+async def get_transformation_recommendations(step_id: int, db: Session = Depends(get_db)):
+    """Get chart recommendations for a completed AI transformation step"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get the transformation step
+        step = db.query(AITransformationStep).filter(
+            AITransformationStep.id == step_id
+        ).first()
+        
+        if not step:
+            raise HTTPException(status_code=404, detail="Transformation step not found")
+        
+        if step.status != 'completed':
+            return {"recommendations": []}
+        
+        # Generate recommendations based on output columns
+        recommendations = []
+        if step.output_columns and len(step.output_columns) > 0:
+            columns = step.output_columns
+            
+            # Categorize columns based on names (heuristic)
+            numeric_columns = []
+            categorical_columns = []
+            date_columns = []
+            
+            for col in columns:
+                col_lower = col.lower()
+                if any(keyword in col_lower for keyword in ['amount', 'price', 'cost', 'value', 'count', 'total', 'sum', 'avg', 'score', 'rate', 'percent', 'number', 'qty', 'quantity']):
+                    numeric_columns.append(col)
+                elif any(keyword in col_lower for keyword in ['date', 'time', 'created', 'updated', 'modified']):
+                    date_columns.append(col)
+                else:
+                    categorical_columns.append(col)
+            
+            # Generate basic recommendations
+            if categorical_columns:
+                main_cat = categorical_columns[0]
+                recommendations.append({
+                    "type": "pie",
+                    "title": f"Distribution of {main_cat}",
+                    "description": f"Breakdown of {main_cat.lower()} values from transformation",
+                    "x_axis": main_cat,
+                    "y_axis": None,
+                    "reason": f"Shows the distribution of categories in your transformed data"
+                })
+                
+                recommendations.append({
+                    "type": "bar",
+                    "title": f"Count by {main_cat}",
+                    "description": f"Count of items for each {main_cat.lower()}",
+                    "x_axis": main_cat,
+                    "y_axis": None,
+                    "reason": f"Visualizes frequency of each {main_cat.lower()} category"
+                })
+            
+            # Numeric analysis
+            if numeric_columns and categorical_columns:
+                num_col = numeric_columns[0]
+                cat_col = categorical_columns[0]
+                recommendations.append({
+                    "type": "bar",
+                    "title": f"{num_col} by {cat_col}",
+                    "description": f"Compare {num_col.lower()} across different {cat_col.lower()}",
+                    "x_axis": cat_col,
+                    "y_axis": num_col,
+                    "reason": f"Shows how {num_col} varies across {cat_col} categories"
+                })
+            
+            # Correlation analysis
+            if len(numeric_columns) >= 2:
+                recommendations.append({
+                    "type": "scatter",
+                    "title": f"{numeric_columns[0]} vs {numeric_columns[1]}",
+                    "description": f"Relationship between {numeric_columns[0]} and {numeric_columns[1]}",
+                    "x_axis": numeric_columns[0],
+                    "y_axis": numeric_columns[1],
+                    "reason": f"Identifies potential correlations in your transformed data"
+                })
+            
+            # Time series if date column exists
+            if date_columns and numeric_columns:
+                date_col = date_columns[0]
+                num_col = numeric_columns[0]
+                recommendations.append({
+                    "type": "line",
+                    "title": f"{num_col} Over Time",
+                    "description": f"Trend of {num_col.lower()} over {date_col.lower()}",
+                    "x_axis": date_col,
+                    "y_axis": num_col,
+                    "reason": f"Shows trends and patterns over time"
+                })
+        
+        return {"recommendations": recommendations[:6]}  # Return top 6 recommendations
         
     except HTTPException:
         raise

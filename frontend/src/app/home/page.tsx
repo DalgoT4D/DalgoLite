@@ -11,16 +11,18 @@ import {
   RefreshCw,
   Calendar,
   TrendingUp,
-  Users,
   Eye,
-  ExternalLink,
   Sheet as SheetIcon,
   Trash2,
   Settings,
-  Zap
+  Zap,
+  ExternalLink,
+  PieChart,
+  Users,
+  Activity
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
-import Navigation from '@/components/Navigation'
+import DashboardLayout from '@/components/DashboardLayout'
 
 interface ConnectedSheet {
   id: number
@@ -39,10 +41,20 @@ interface TransformationProject {
   id: number
   name: string
   description: string
-  mode: string
   sheet_ids: number[]
   created_at: string
   updated_at: string
+}
+
+interface Chart {
+  id: number
+  chart_name: string
+  chart_type: string
+  sheet_id?: number
+  project_id?: number
+  created_at: string
+  x_axis_column?: string
+  y_axis_column?: string
 }
 
 export default function HomePage() {
@@ -50,10 +62,13 @@ export default function HomePage() {
   const router = useRouter()
   const [sheets, setSheets] = useState<ConnectedSheet[]>([])
   const [projects, setProjects] = useState<TransformationProject[]>([])
+  const [charts, setCharts] = useState<Chart[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshingSheets, setRefreshingSheets] = useState<Set<number>>(new Set())
   const [deletingSheets, setDeletingSheets] = useState<Set<number>>(new Set())
   const [deleteConfirmSheet, setDeleteConfirmSheet] = useState<ConnectedSheet | null>(null)
+  const [deletingProjects, setDeletingProjects] = useState<Set<number>>(new Set())
+  const [deleteConfirmProject, setDeleteConfirmProject] = useState<TransformationProject | null>(null)
   const [stats, setStats] = useState({
     totalSheets: 0,
     totalProjects: 0,
@@ -67,11 +82,13 @@ export default function HomePage() {
       router.push('/')
       return
     }
-    fetchConnectedSheets()
+    fetchAllData()
   }, [isAuthenticated, router])
 
-  const fetchConnectedSheets = async () => {
+  const fetchAllData = async () => {
     try {
+      setLoading(true)
+      
       // Fetch sheets
       const sheetsResponse = await fetch('http://localhost:8000/sheets/connected')
       const sheetsData = sheetsResponse.ok ? await sheetsResponse.json() : { sheets: [] }
@@ -82,9 +99,67 @@ export default function HomePage() {
       const projectsData = projectsResponse.ok ? await projectsResponse.json() : { projects: [] }
       setProjects(projectsData.projects)
       
+      // Fetch all charts
+      await fetchAllCharts(sheetsData.sheets, projectsData.projects)
+      
       // Calculate stats
+      const totalChartCount = await calculateTotalCharts(sheetsData.sheets, projectsData.projects)
+      const totalDataRows = sheetsData.sheets.reduce((sum: number, sheet: ConnectedSheet) => sum + sheet.total_rows, 0)
+      
+      setStats({
+        totalSheets: sheetsData.sheets.length,
+        totalProjects: projectsData.projects.length,
+        totalCharts: totalChartCount,
+        totalDataRows: totalDataRows,
+        lastSync: sheetsData.sheets.length > 0 ? sheetsData.sheets[0].last_synced : null
+      })
+    } catch (error) {
+      console.error('Error fetching data:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const fetchAllCharts = async (sheets: ConnectedSheet[], projects: TransformationProject[]) => {
+    try {
+      const allCharts: Chart[] = []
+
+      // Fetch sheet charts
+      for (const sheet of sheets) {
+        try {
+          const chartsResponse = await fetch(`http://localhost:8000/sheets/${sheet.id}/charts`)
+          if (chartsResponse.ok) {
+            const chartsData = await chartsResponse.json()
+            allCharts.push(...chartsData.charts.map((chart: any) => ({ ...chart, sheet_id: sheet.id })))
+          }
+        } catch (error) {
+          console.error(`Error fetching charts for sheet ${sheet.id}:`, error)
+        }
+      }
+
+      // Fetch project charts  
+      for (const project of projects) {
+        try {
+          const chartsResponse = await fetch(`http://localhost:8000/projects/${project.id}/charts`)
+          if (chartsResponse.ok) {
+            const chartsData = await chartsResponse.json()
+            allCharts.push(...chartsData.charts.map((chart: any) => ({ ...chart, project_id: project.id })))
+          }
+        } catch (error) {
+          console.error(`Error fetching charts for project ${project.id}:`, error)
+        }
+      }
+
+      setCharts(allCharts)
+    } catch (error) {
+      console.error('Error fetching charts:', error)
+    }
+  }
+
+  const calculateTotalCharts = async (sheets: ConnectedSheet[], projects: TransformationProject[]) => {
+    try {
       const sheetCharts = await Promise.all(
-        sheetsData.sheets.map(async (sheet: ConnectedSheet) => {
+        sheets.map(async (sheet: ConnectedSheet) => {
           const chartsResponse = await fetch(`http://localhost:8000/sheets/${sheet.id}/charts`)
           if (chartsResponse.ok) {
             const chartsData = await chartsResponse.json()
@@ -95,7 +170,7 @@ export default function HomePage() {
       )
 
       const projectCharts = await Promise.all(
-        projectsData.projects.map(async (project: any) => {
+        projects.map(async (project: any) => {
           const chartsResponse = await fetch(`http://localhost:8000/projects/${project.id}/charts`)
           if (chartsResponse.ok) {
             const chartsData = await chartsResponse.json()
@@ -105,17 +180,10 @@ export default function HomePage() {
         })
       )
       
-      setStats({
-        totalSheets: sheetsData.sheets.length,
-        totalProjects: projectsData.projects.length,
-        totalCharts: sheetCharts.reduce((sum, count) => sum + count, 0) + projectCharts.reduce((sum, count) => sum + count, 0),
-        totalDataRows: sheetsData.sheets.reduce((sum: number, sheet: ConnectedSheet) => sum + sheet.total_rows, 0),
-        lastSync: sheetsData.sheets.length > 0 ? sheetsData.sheets[0].last_synced : null
-      })
+      return sheetCharts.reduce((sum, count) => sum + count, 0) + projectCharts.reduce((sum, count) => sum + count, 0)
     } catch (error) {
-      console.error('Error fetching data:', error)
-    } finally {
-      setLoading(false)
+      console.error('Error calculating total charts:', error)
+      return 0
     }
   }
 
@@ -123,26 +191,24 @@ export default function HomePage() {
     router.push('/dashboard')
   }
 
-  const handleTransformSheets = () => {
+  const handleCreateTransform = () => {
     router.push('/transform')
   }
 
-  const handleViewCharts = (sheetId: number) => {
-    router.push(`/charts?sheet=${sheetId}`)
+  const handleCreateChart = () => {
+    router.push('/charts')
   }
 
   const handleRefreshSheet = async (sheet: ConnectedSheet) => {
     setRefreshingSheets(prev => new Set([...prev, sheet.id]))
     
     try {
-      // Call the backend to resync the sheet data
       const response = await fetch(`http://localhost:8000/sheets/${sheet.id}/resync`, {
         method: 'POST',
       })
       
       if (response.ok) {
-        // Refresh the connected sheets data to get updated info
-        await fetchConnectedSheets()
+        await fetchAllData()
       } else {
         alert('Failed to refresh sheet data. Please try again.')
       }
@@ -167,15 +233,12 @@ export default function HomePage() {
       })
       
       if (response.ok) {
-        // Remove the sheet from local state and refresh
-        await fetchConnectedSheets()
+        await fetchAllData()
         setDeleteConfirmSheet(null)
       } else {
-        // Handle different error types
         const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }))
         
         if (response.status === 400 && errorData.detail.includes('transformation projects')) {
-          // Show specific error for transformation project dependencies
           alert(errorData.detail)
         } else {
           alert('Failed to delete sheet. Please try again.')
@@ -193,8 +256,39 @@ export default function HomePage() {
     }
   }
 
+  const handleDeleteProject = async (project: TransformationProject) => {
+    setDeletingProjects(prev => new Set([...prev, project.id]))
+    
+    try {
+      const response = await fetch(`http://localhost:8000/projects/${project.id}`, {
+        method: 'DELETE',
+      })
+      
+      if (response.ok) {
+        await fetchAllData()
+        setDeleteConfirmProject(null)
+      } else {
+        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }))
+        alert(errorData.detail || 'Failed to delete project. Please try again.')
+      }
+    } catch (error) {
+      console.error('Error deleting project:', error)
+      alert('Error deleting project. Please try again.')
+    } finally {
+      setDeletingProjects(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(project.id)
+        return newSet
+      })
+    }
+  }
+
   const confirmDeleteSheet = (sheet: ConnectedSheet) => {
     setDeleteConfirmSheet(sheet)
+  }
+
+  const confirmDeleteProject = (project: TransformationProject) => {
+    setDeleteConfirmProject(project)
   }
 
   const formatDate = (dateString: string) => {
@@ -202,305 +296,377 @@ export default function HomePage() {
   }
 
   const getSyncStatus = (lastSynced: string) => {
-    // Backend now sends properly formatted UTC timestamps with Z suffix
     const syncTime = new Date(lastSynced)
     const now = new Date()
     const diffMinutes = (now.getTime() - syncTime.getTime()) / (1000 * 60)
-    
-    // Debug logging
-    console.log('getSyncStatus debug:', {
-      lastSynced,
-      syncTime: syncTime.toISOString(),
-      now: now.toISOString(),
-      diffMinutes
-    })
     
     if (diffMinutes < 2) {
       return { status: 'success', message: 'Just synced', icon: CheckCircle, color: 'text-green-600' }
     } else if (diffMinutes < 60) {
       return { status: 'success', message: `${Math.floor(diffMinutes)}m ago`, icon: CheckCircle, color: 'text-green-600' }
-    } else if (diffMinutes < 1440) { // 24 hours
+    } else if (diffMinutes < 1440) { 
       return { status: 'warning', message: `${Math.floor(diffMinutes / 60)}h ago`, icon: AlertCircle, color: 'text-yellow-600' }
     } else {
       return { status: 'error', message: 'Needs sync', icon: AlertCircle, color: 'text-red-600' }
     }
   }
 
+  const getChartIcon = (chartType: string) => {
+    switch (chartType) {
+      case 'pie':
+        return PieChart
+      case 'bar':
+      case 'line':
+      case 'scatter':
+      default:
+        return BarChart3
+    }
+  }
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50">
-        <Navigation isAuthenticated={isAuthenticated} onLogout={logout} />
+      <DashboardLayout isAuthenticated={isAuthenticated} onLogout={logout}>
         <div className="flex items-center justify-center py-20">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-            <p className="text-gray-600">Loading your data overview...</p>
+            <p className="text-gray-600">Loading your dashboard...</p>
           </div>
         </div>
-      </div>
+      </DashboardLayout>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Navigation isAuthenticated={isAuthenticated} onLogout={logout} />
-      
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header */}
-        <div className="mb-12">
-          <div className="text-center mb-8">
-            <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">Dashboard</h1>
-            <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-              Manage your connected Google Sheets and track your data analytics performance
-            </p>
-          </div>
-          <div className="h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 rounded-full max-w-xs mx-auto"></div>
+    <DashboardLayout isAuthenticated={isAuthenticated} onLogout={logout}>
+      {/* Header */}
+      <div className="mb-8">
+        <div className="text-center mb-8">
+          <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">Dashboard</h1>
+          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+            Manage your data sources, transformations, and charts in one place
+          </p>
         </div>
+        <div className="h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 rounded-full max-w-xs mx-auto"></div>
+      </div>
 
-        {/* Stats Overview */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 mb-12">
-          <div className="bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-xl shadow-lg p-8 transform hover:scale-105 transition-all duration-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-3xl font-bold mb-2">{stats.totalSheets}</p>
-                <p className="text-blue-100 text-lg">Connected Sheets</p>
-              </div>
-              <div className="bg-white/20 rounded-full p-4">
-                <Database className="text-white" size={32} />
-              </div>
+      {/* Stats Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 mb-12">
+        <div className="bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-xl shadow-lg p-8 transform hover:scale-105 transition-all duration-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-3xl font-bold mb-2">{stats.totalSheets}</p>
+              <p className="text-blue-100 text-lg">Data Sources</p>
             </div>
-          </div>
-
-          <div className="bg-gradient-to-br from-orange-500 to-orange-600 text-white rounded-xl shadow-lg p-8 transform hover:scale-105 transition-all duration-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-3xl font-bold mb-2">{stats.totalProjects}</p>
-                <p className="text-orange-100 text-lg">Transform Projects</p>
-              </div>
-              <div className="bg-white/20 rounded-full p-4">
-                <Zap className="text-white" size={32} />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-gradient-to-br from-green-500 to-green-600 text-white rounded-xl shadow-lg p-8 transform hover:scale-105 transition-all duration-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-3xl font-bold mb-2">{stats.totalCharts}</p>
-                <p className="text-green-100 text-lg">Total Charts</p>
-              </div>
-              <div className="bg-white/20 rounded-full p-4">
-                <BarChart3 className="text-white" size={32} />
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-gradient-to-br from-purple-500 to-purple-600 text-white rounded-xl shadow-lg p-8 transform hover:scale-105 transition-all duration-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-3xl font-bold mb-2">{stats.totalDataRows.toLocaleString()}</p>
-                <p className="text-purple-100 text-lg">Data Rows</p>
-              </div>
-              <div className="bg-white/20 rounded-full p-4">
-                <TrendingUp className="text-white" size={32} />
-              </div>
+            <div className="bg-white/20 rounded-full p-4">
+              <Database className="text-white" size={32} />
             </div>
           </div>
         </div>
 
-        {/* Data Sources */}
-        <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
-          <div className="bg-gradient-to-r from-gray-50 to-gray-100 px-8 py-6 border-b border-gray-200">
-            <div className="flex justify-between items-center">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">Data Sources</h2>
-                <p className="text-gray-600">Manage your individual sheets and transformation projects</p>
-              </div>
-              <div className="flex items-center gap-3">
-                {sheets.length >= 2 && (
-                  <button
-                    onClick={handleTransformSheets}
-                    className="bg-gradient-to-r from-green-600 to-emerald-700 hover:from-green-700 hover:to-emerald-800 text-white px-6 py-3 rounded-xl font-semibold flex items-center gap-3 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105"
-                  >
-                    <Database size={22} />
-                    New Transformation
-                  </button>
-                )}
-                <button
-                  onClick={handleConnectSheet}
-                  className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-6 py-3 rounded-xl font-semibold flex items-center gap-3 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105"
-                >
-                  <Plus size={22} />
-                  Connect Sheet
-                </button>
-              </div>
+        <div className="bg-gradient-to-br from-green-500 to-green-600 text-white rounded-xl shadow-lg p-8 transform hover:scale-105 transition-all duration-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-3xl font-bold mb-2">{stats.totalProjects}</p>
+              <p className="text-green-100 text-lg">Transformations</p>
+            </div>
+            <div className="bg-white/20 rounded-full p-4">
+              <Zap className="text-white" size={32} />
             </div>
           </div>
+        </div>
 
-          <div className="p-8">
-            {sheets.length === 0 && projects.length === 0 ? (
-              <div className="text-center py-16">
-                <div className="bg-gradient-to-br from-blue-100 to-purple-100 rounded-full p-6 w-24 h-24 mx-auto mb-6">
-                  <Database className="mx-auto h-12 w-12 text-blue-600" />
+        <div className="bg-gradient-to-br from-purple-500 to-purple-600 text-white rounded-xl shadow-lg p-8 transform hover:scale-105 transition-all duration-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-3xl font-bold mb-2">{stats.totalCharts}</p>
+              <p className="text-purple-100 text-lg">Charts</p>
+            </div>
+            <div className="bg-white/20 rounded-full p-4">
+              <BarChart3 className="text-white" size={32} />
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-gradient-to-br from-orange-500 to-orange-600 text-white rounded-xl shadow-lg p-8 transform hover:scale-105 transition-all duration-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-3xl font-bold mb-2">{stats.totalDataRows.toLocaleString()}</p>
+              <p className="text-orange-100 text-lg">Data Rows</p>
+            </div>
+            <div className="bg-white/20 rounded-full p-4">
+              <TrendingUp className="text-white" size={32} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-8">
+        {/* Data Sources Section */}
+        <div>
+          <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden h-fit">
+            <div className="bg-gradient-to-r from-blue-50 to-blue-100 px-6 py-4 border-b border-gray-200">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <Database className="text-blue-600" size={24} />
+                  <h2 className="text-xl font-bold text-gray-900">Data Sources</h2>
                 </div>
-                <h3 className="text-2xl font-bold text-gray-900 mb-3">Ready to Get Started?</h3>
-                <p className="text-gray-600 mb-8 text-lg max-w-md mx-auto">
-                  Connect your first Google Sheet to unlock powerful data visualization and insights.
-                </p>
                 <button
                   onClick={handleConnectSheet}
-                  className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-8 py-4 rounded-xl font-semibold inline-flex items-center gap-3 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105 text-lg"
+                  className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg transition-colors"
+                  title="Connect new sheet"
                 >
-                  <Plus size={24} />
-                  Connect Your First Sheet
+                  <Plus size={16} />
                 </button>
               </div>
-            ) : (
-              <div className="space-y-8">
-                {/* Individual Sheets Section */}
-                {sheets.length > 0 && (
-                  <div>
-                    <div className="flex items-center gap-3 mb-4">
-                      <SheetIcon className="text-blue-600" size={24} />
-                      <h3 className="text-lg font-semibold text-gray-900">Individual Sheets</h3>
-                      <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs font-medium">{sheets.length}</span>
-                    </div>
-                    
-                    <div className="space-y-3">
-                      {sheets.map((sheet) => {
-                        const syncStatus = getSyncStatus(sheet.last_synced)
-                        const StatusIcon = syncStatus.icon
-                        const isRefreshing = refreshingSheets.has(sheet.id)
-                        const isDeleting = deletingSheets.has(sheet.id)
-                        
-                        return (
-                          <div key={sheet.id} className="bg-gray-50 border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:bg-blue-50 transition-all duration-200">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-3 flex-1">
-                                <div className="bg-blue-600 text-white rounded p-1">
-                                  <SheetIcon size={16} />
-                                </div>
-                                
-                                <div className="flex-1">
-                                  <div className="flex items-center gap-3 mb-1">
-                                    <h4 className="font-bold text-gray-900">{sheet.title}</h4>
-                                    <div className={`flex items-center gap-1 ${syncStatus.color}`}>
-                                      <StatusIcon size={12} />
-                                      <span className="text-xs">{syncStatus.message}</span>
-                                    </div>
-                                  </div>
-                                  
-                                  <div className="flex items-center gap-4 text-xs text-gray-600">
-                                    <span>{sheet.total_rows.toLocaleString()} rows</span>
-                                    <span>{sheet.columns.length} columns</span>
-                                    <span>Last synced {formatDate(sheet.last_synced).split(',')[0]}</span>
-                                  </div>
-                                </div>
-                              </div>
+            </div>
 
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => handleRefreshSheet(sheet)}
-                                  disabled={isRefreshing}
-                                  className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white p-2 rounded-lg transition-colors"
-                                  title="Sync data from Google Sheets"
-                                >
-                                  <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
-                                </button>
-                                <button
-                                  onClick={() => router.push(`/sheets/${sheet.id}`)}
-                                  className="bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg transition-colors"
-                                  title="View sheet details and data"
-                                >
-                                  <Eye size={16} />
-                                </button>
-                                <button
-                                  onClick={() => handleViewCharts(sheet.id)}
-                                  className="bg-purple-600 hover:bg-purple-700 text-white p-2 rounded-lg transition-colors"
-                                  title="View and create charts"
-                                >
-                                  <BarChart3 size={16} />
-                                </button>
-                                <button
-                                  onClick={() => confirmDeleteSheet(sheet)}
-                                  disabled={isDeleting}
-                                  className="bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white p-2 rounded-lg transition-colors"
-                                  title="Delete this sheet"
-                                >
-                                  <Trash2 size={16} />
-                                </button>
-                              </div>
+            <div className="p-6">
+              {sheets.length === 0 ? (
+                <div className="text-center py-8">
+                  <div className="bg-blue-100 rounded-full p-4 w-16 h-16 mx-auto mb-4">
+                    <SheetIcon className="mx-auto h-8 w-8 text-blue-600" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-2">No Data Sources</h3>
+                  <p className="text-gray-600 mb-4">Connect your first Google Sheet to get started.</p>
+                  <button
+                    onClick={handleConnectSheet}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                  >
+                    Connect Sheet
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <div className="flex items-center gap-2 mb-4">
+                    <SheetIcon className="text-green-600" size={20} />
+                    <h3 className="font-semibold text-gray-900">Google Sheets</h3>
+                    <span className="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium">
+                      {sheets.length}
+                    </span>
+                  </div>
+                  
+                  <div className="space-y-3 max-h-80 overflow-y-auto">
+                    {sheets.map((sheet) => {
+                      const syncStatus = getSyncStatus(sheet.last_synced)
+                      const StatusIcon = syncStatus.icon
+                      const isRefreshing = refreshingSheets.has(sheet.id)
+                      const isDeleting = deletingSheets.has(sheet.id)
+                      
+                      return (
+                        <div key={sheet.id} className="bg-gray-50 border border-gray-200 rounded-lg p-3 hover:border-blue-300 transition-colors">
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className="font-medium text-gray-900 text-sm truncate">{sheet.title}</h4>
+                            <div className={`flex items-center gap-1 ${syncStatus.color}`}>
+                              <StatusIcon size={12} />
+                              <span className="text-xs">{syncStatus.message}</span>
                             </div>
                           </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Transformation Projects Section */}
-                {projects.length > 0 && (
-                  <div>
-                    <div className="flex items-center gap-3 mb-4">
-                      <Database className="text-green-600" size={24} />
-                      <h3 className="text-lg font-semibold text-gray-900">Transformation Projects</h3>
-                      <span className="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium">{projects.length}</span>
-                    </div>
-                    
-                    <div className="space-y-3">
-                      {projects.map((project) => (
-                        <div key={project.id} className="bg-green-50 border border-green-200 rounded-lg p-4 hover:border-green-300 hover:bg-green-100 transition-all duration-200">
+                          
                           <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3 flex-1">
-                              <div className="bg-green-600 text-white rounded p-1">
-                                <Database size={16} />
-                              </div>
-                              
-                              <div className="flex-1">
-                                <div className="flex items-center gap-3 mb-1">
-                                  <h4 className="font-bold text-gray-900">{project.name}</h4>
-                                  <span className="bg-white text-green-800 px-2 py-1 rounded text-xs font-medium">
-                                    {project.mode}
-                                  </span>
-                                </div>
-                                
-                                <div className="flex items-center gap-4 text-xs text-gray-600">
-                                  <span>{project.description}</span>
-                                  <span>{project.sheet_ids.length} sheets combined</span>
-                                  <span>Created {formatDate(project.created_at).split(',')[0]}</span>
-                                </div>
-                              </div>
+                            <div className="text-xs text-gray-600">
+                              {sheet.columns.length} columns
                             </div>
-
+                            
                             <div className="flex items-center gap-1">
                               <button
-                                onClick={() => router.push(`/projects/${project.id}`)}
-                                className="bg-green-600 hover:bg-green-700 text-white p-2 rounded-lg transition-colors"
-                                title="View project details and pipeline"
+                                onClick={() => handleRefreshSheet(sheet)}
+                                disabled={isRefreshing}
+                                className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white p-1 rounded transition-colors"
+                                title="Sync data"
                               >
-                                <Settings size={16} />
+                                <RefreshCw size={12} className={isRefreshing ? 'animate-spin' : ''} />
                               </button>
                               <button
-                                onClick={() => router.push(`/charts?project=${project.id}`)}
-                                className="bg-purple-600 hover:bg-purple-700 text-white p-2 rounded-lg transition-colors"
-                                title="View and create charts"
+                                onClick={() => router.push(`/sheets/${sheet.id}`)}
+                                className="bg-blue-600 hover:bg-blue-700 text-white p-1 rounded transition-colors"
+                                title="View details"
                               >
-                                <BarChart3 size={16} />
+                                <Eye size={12} />
+                              </button>
+                              <button
+                                onClick={() => confirmDeleteSheet(sheet)}
+                                disabled={isDeleting}
+                                className="bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white p-1 rounded transition-colors"
+                                title="Delete sheet"
+                              >
+                                <Trash2 size={12} />
                               </button>
                             </div>
                           </div>
                         </div>
-                      ))}
-                    </div>
+                      )
+                    })}
                   </div>
-                )}
-              </div>
-            )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </main>
 
-      {/* Delete Confirmation Modal */}
+        {/* Transformations Section */}
+        <div>
+          <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden h-fit">
+            <div className="bg-gradient-to-r from-green-50 to-green-100 px-6 py-4 border-b border-gray-200">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <Zap className="text-green-600" size={24} />
+                  <h2 className="text-xl font-bold text-gray-900">Transformations</h2>
+                </div>
+                <button
+                  onClick={handleCreateTransform}
+                  disabled={sheets.length === 0}
+                  className={`p-2 rounded-lg transition-colors ${
+                    sheets.length === 0 
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                      : 'bg-green-600 hover:bg-green-700 text-white'
+                  }`}
+                  title={sheets.length === 0 ? 'Connect a sheet first' : 'Create new transformation'}
+                >
+                  <Plus size={16} />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6">
+              {projects.length === 0 ? (
+                <div className="text-center py-8">
+                  <div className="bg-green-100 rounded-full p-4 w-16 h-16 mx-auto mb-4">
+                    <Zap className="mx-auto h-8 w-8 text-green-600" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-2">No Transformations</h3>
+                  <p className="text-gray-600 mb-4">Create your first data transformation project.</p>
+                  <button
+                    onClick={handleCreateTransform}
+                    disabled={sheets.length === 0}
+                    className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                      sheets.length === 0 
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                        : 'bg-green-600 hover:bg-green-700 text-white'
+                    }`}
+                  >
+                    Create Transform
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-80 overflow-y-auto">
+                  {projects.map((project) => (
+                    <div key={project.id} className="bg-green-50 border border-green-200 rounded-lg p-3 hover:border-green-300 transition-colors">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="font-medium text-gray-900 text-sm truncate">{project.name}</h4>
+                      </div>
+                      
+                      <p className="text-xs text-gray-600 mb-2 line-clamp-2">{project.description}</p>
+                      
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs text-gray-600">
+                          {project.sheet_ids.length} sheets • Created {formatDate(project.created_at).split(',')[0]}
+                        </div>
+                        
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => router.push(`/transform/${project.id}/canvas`)}
+                            className="bg-green-600 hover:bg-green-700 text-white p-1 rounded transition-colors"
+                            title="Open canvas"
+                          >
+                            <Settings size={12} />
+                          </button>
+                          <button
+                            onClick={() => confirmDeleteProject(project)}
+                            disabled={deletingProjects.has(project.id)}
+                            className="bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white p-1 rounded transition-colors"
+                            title="Delete project"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Charts Section */}
+        <div>
+          <div className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden h-fit">
+            <div className="bg-gradient-to-r from-purple-50 to-purple-100 px-6 py-4 border-b border-gray-200">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-3">
+                  <BarChart3 className="text-purple-600" size={24} />
+                  <h2 className="text-xl font-bold text-gray-900">Charts</h2>
+                </div>
+                <button
+                  onClick={handleCreateChart}
+                  className="bg-purple-600 hover:bg-purple-700 text-white p-2 rounded-lg transition-colors"
+                  title="Create new chart"
+                >
+                  <Plus size={16} />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6">
+              {charts.length === 0 ? (
+                <div className="text-center py-8">
+                  <div className="bg-purple-100 rounded-full p-4 w-16 h-16 mx-auto mb-4">
+                    <BarChart3 className="mx-auto h-8 w-8 text-purple-600" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-2">No Charts</h3>
+                  <p className="text-gray-600 mb-4">Create your first chart to visualize your data.</p>
+                  <button
+                    onClick={handleCreateChart}
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                  >
+                    Create Chart
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-80 overflow-y-auto">
+                  {charts.map((chart) => {
+                    const ChartIcon = getChartIcon(chart.chart_type)
+                    const isSheetChart = chart.sheet_id !== undefined
+                    const sourceSheet = isSheetChart ? sheets.find(s => s.id === chart.sheet_id) : null
+                    const sourceProject = !isSheetChart ? projects.find(p => p.id === chart.project_id) : null
+                    
+                    return (
+                      <div key={chart.id} className="bg-purple-50 border border-purple-200 rounded-lg p-3 hover:border-purple-300 transition-colors">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <ChartIcon size={14} className="text-purple-600" />
+                            <h4 className="font-medium text-gray-900 text-sm truncate">{chart.chart_name}</h4>
+                          </div>
+                          <span className="text-xs text-gray-500 capitalize">{chart.chart_type}</span>
+                        </div>
+                        
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs text-gray-600">
+                            {isSheetChart && sourceSheet ? `Sheet: ${sourceSheet.title}` : ''}
+                            {!isSheetChart && sourceProject ? `Project: ${sourceProject.name}` : ''}
+                          </div>
+                          
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => router.push(`/charts?${isSheetChart ? `sheet=${chart.sheet_id}` : `project=${chart.project_id}`}`)}
+                              className="bg-purple-600 hover:bg-purple-700 text-white p-1 rounded transition-colors"
+                              title="View chart"
+                            >
+                              <Eye size={12} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Delete Confirmation Modal for Sheets */}
       {deleteConfirmSheet && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
@@ -539,6 +705,46 @@ export default function HomePage() {
           </div>
         </div>
       )}
-    </div>
+
+      {/* Delete Confirmation Modal for Projects */}
+      {deleteConfirmProject && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="bg-red-100 text-red-600 p-2 rounded-full">
+                <Trash2 size={20} />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">Delete Project</h3>
+            </div>
+            
+            <p className="text-gray-600 mb-6">
+              Are you sure you want to delete project <strong>"{deleteConfirmProject.name}"</strong>? 
+              This will permanently remove the project and all associated transformations and charts from the database. 
+              This action cannot be undone.
+            </p>
+            
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setDeleteConfirmProject(null)}
+                className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDeleteProject(deleteConfirmProject)}
+                disabled={deletingProjects.has(deleteConfirmProject.id)}
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  deletingProjects.has(deleteConfirmProject.id)
+                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                    : 'bg-red-600 hover:bg-red-700 text-white'
+                }`}
+              >
+                {deletingProjects.has(deleteConfirmProject.id) ? 'Deleting...' : 'Delete Project'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </DashboardLayout>
   )
 }

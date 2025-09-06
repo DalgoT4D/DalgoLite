@@ -1,0 +1,1056 @@
+'use client'
+
+import React, { useState, useCallback, useEffect, useMemo } from 'react'
+import ReactFlow, {
+  Node,
+  Edge,
+  addEdge,
+  Connection,
+  useNodesState,
+  useEdgesState,
+  Controls,
+  MiniMap,
+  Background,
+  BackgroundVariant,
+  NodeTypes,
+  EdgeTypes,
+} from 'reactflow'
+import 'reactflow/dist/style.css'
+import { Plus, Play, Save, Zap, X } from 'lucide-react'
+
+import SheetNode from './SheetNode'
+import TransformationNode from './TransformationNode'
+import JoinNode from './JoinNode'
+import DataViewer from './DataViewer'
+import ContextMenu from './ContextMenu'
+import JoinModal from './JoinModal'
+
+// Define custom node types
+const nodeTypes: NodeTypes = {
+  sheetNode: SheetNode,
+  transformationNode: TransformationNode,
+  joinNode: JoinNode,
+}
+
+interface TransformCanvasProps {
+  projectId: number
+  sheets: Array<{
+    id: number
+    title: string
+    columns: string[]
+    total_rows: number
+  }>
+  transformationSteps: Array<{
+    id: number
+    step_name: string
+    user_prompt: string
+    generated_code?: string
+    code_summary: string
+    code_explanation?: string
+    status: string
+    error_message?: string
+    execution_time_ms?: number
+    output_columns?: string[]
+    canvas_position: { x: number; y: number }
+  }>
+  onCreateTransformationStep: (stepData: {
+    step_name: string
+    user_prompt: string
+    output_table_name?: string
+    upstream_sheet_ids: number[]
+    upstream_step_ids: number[]
+    canvas_position: { x: number; y: number }
+  }) => Promise<void>
+  onUpdateTransformationStep: (stepId: number, updates: any) => Promise<void>
+  onExecuteStep: (stepId: number) => Promise<void>
+  onExecuteAll?: () => Promise<void>
+  onDeleteTransformationStep?: (stepId: number) => Promise<void>
+}
+
+export default function TransformCanvas({
+  projectId,
+  sheets,
+  transformationSteps,
+  onCreateTransformationStep,
+  onUpdateTransformationStep,
+  onExecuteStep,
+  onExecuteAll,
+  onDeleteTransformationStep,
+}: TransformCanvasProps) {
+  const [nodes, setNodes, onNodesChangeOriginal] = useNodesState([])
+  const [edges, setEdges, onEdgesChangeOriginal] = useEdgesState([])
+  
+  // Wrap the original handlers to detect changes
+  const onNodesChange = useCallback((changes: any) => {
+    onNodesChangeOriginal(changes)
+    // Check if this is a position change (drag)
+    const hasPositionChange = changes.some((change: any) => change.type === 'position')
+    if (hasPositionChange) {
+      setHasUnsavedChanges(true)
+    }
+  }, [onNodesChangeOriginal])
+  
+  const onEdgesChange = useCallback((changes: any) => {
+    onEdgesChangeOriginal(changes)
+    setHasUnsavedChanges(true)
+  }, [onEdgesChangeOriginal])
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [createModalPosition, setCreateModalPosition] = useState({ x: 0, y: 0 })
+  const [newStepName, setNewStepName] = useState('')
+  const [newStepPrompt, setNewStepPrompt] = useState('')
+  const [newOutputTableName, setNewOutputTableName] = useState('')
+  const [selectedUpstreamNodes, setSelectedUpstreamNodes] = useState<string[]>([])
+  const [isExecutingAll, setIsExecutingAll] = useState(false)
+  
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+  
+  // Join modal state
+  const [showJoinModal, setShowJoinModal] = useState(false)
+  const [joinModalPosition, setJoinModalPosition] = useState({ x: 0, y: 0 })
+  
+  // AI Transformation modal drag state
+  const [isTransformModalDragging, setIsTransformModalDragging] = useState(false)
+  const [transformModalDragOffset, setTransformModalDragOffset] = useState({ x: 0, y: 0 })
+  const [transformModalPosition, setTransformModalPosition] = useState({ x: 0, y: 0 })
+  
+  // Data viewer state
+  const [dataViewerOpen, setDataViewerOpen] = useState(false)
+  const [dataViewerSource, setDataViewerSource] = useState<{
+    id: string
+    type: 'sheet' | 'transformation' | 'project'
+    name: string
+    transformationStep?: string
+  } | null>(null)
+  
+  // Auto-save state
+  const [lastAutoSave, setLastAutoSave] = useState<Date>(new Date())
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [lastSaved, setLastSaved] = useState<Date | null>(null)
+
+  // Save canvas layout function
+  const saveCanvasLayout = useCallback(async (isManual = false) => {
+    if (isManual) {
+      setIsSaving(true)
+    }
+    try {
+      const nodeData = nodes.map(node => ({
+        id: node.id,
+        type: node.type,
+        position: node.position,
+        data: {
+          // Only save essential data, not functions
+          ...(node.type === 'sheetNode' ? { sheet: node.data.sheet } : {}),
+          ...(node.type === 'transformationNode' ? { 
+            step: {
+              id: node.data.step.id,
+              step_name: node.data.step.step_name,
+              status: node.data.step.status,
+              canvas_position: node.position
+            }
+          } : {})
+        }
+      }))
+
+      const connectionData = edges.map(edge => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        sourceHandle: edge.sourceHandle,
+        targetHandle: edge.targetHandle
+      }))
+
+      const response = await fetch(`http://localhost:8000/projects/${projectId}/canvas-layout`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          nodes: nodeData,
+          connections: connectionData
+        }),
+      })
+
+      if (response.ok) {
+        setLastAutoSave(new Date())
+        setHasUnsavedChanges(false)
+        if (isManual) {
+          setLastSaved(new Date())
+        }
+        console.log(isManual ? 'Canvas layout saved successfully' : 'Canvas layout auto-saved successfully')
+      } else {
+        console.error('Failed to save canvas layout')
+      }
+    } catch (error) {
+      console.error('Error saving canvas layout:', error)
+    } finally {
+      if (isManual) {
+        setIsSaving(false)
+      }
+    }
+  }, [nodes, edges, projectId])
+
+  // Manual save handler
+  const handleManualSave = useCallback(() => {
+    saveCanvasLayout(true)
+  }, [saveCanvasLayout])
+
+  // Auto-save interval (every 10 seconds)
+  useEffect(() => {
+    if (hasUnsavedChanges) {
+      const autoSaveInterval = setInterval(() => {
+        saveCanvasLayout()
+      }, 10000) // 10 seconds
+
+      return () => clearInterval(autoSaveInterval)
+    }
+  }, [hasUnsavedChanges, saveCanvasLayout])
+
+  // Auto-save on edge changes (connections)
+  useEffect(() => {
+    if (hasUnsavedChanges) {
+      const saveTimeout = setTimeout(() => {
+        saveCanvasLayout()
+      }, 100)
+      return () => clearTimeout(saveTimeout)
+    }
+  }, [edges, hasUnsavedChanges, saveCanvasLayout])
+
+
+  // Initialize nodes from sheets and transformation steps
+  useEffect(() => {
+    const initializeCanvas = async () => {
+      // Load canvas layout inline to avoid dependency issues
+      let savedLayout = null
+      try {
+        const response = await fetch(`http://localhost:8000/projects/${projectId}`)
+        if (response.ok) {
+          const project = await response.json()
+          console.log('DEBUG: Loaded project:', project)
+          console.log('DEBUG: Project keys:', Object.keys(project))
+          console.log('DEBUG: canvas_layout value:', project.canvas_layout)
+          if (project.canvas_layout) {
+            console.log('DEBUG: Found canvas_layout:', project.canvas_layout)
+            savedLayout = project.canvas_layout
+            // Load saved connections
+            if (project.canvas_layout.connections) {
+              const savedEdges = project.canvas_layout.connections.map((conn: any) => ({
+                id: conn.id,
+                source: conn.source,
+                target: conn.target,
+                sourceHandle: conn.sourceHandle,
+                targetHandle: conn.targetHandle
+              }))
+              console.log('DEBUG: Setting edges:', savedEdges)
+              setEdges(savedEdges)
+            }
+          } else {
+            console.log('DEBUG: No canvas_layout found in project')
+          }
+        } else {
+          console.log('DEBUG: Failed to fetch project:', response.status)
+        }
+      } catch (error) {
+        console.error('Error loading canvas layout:', error)
+      }
+      
+      console.log('DEBUG: savedLayout received in initializeCanvas:', savedLayout)
+      const initialNodes: Node[] = []
+    
+      // Add sheet nodes
+      sheets.forEach((sheet, index) => {
+        // Check if there's a saved position for this sheet
+        const savedNode = savedLayout?.nodes?.find((n: any) => n.id === `sheet-${sheet.id}`)
+        const position = savedNode?.position || { x: 50, y: 50 + index * 150 }
+        console.log(`DEBUG: Sheet ${sheet.id} - savedNode:`, savedNode, 'position:', position)
+        
+        initialNodes.push({
+          id: `sheet-${sheet.id}`,
+          type: 'sheetNode',
+          position,
+          data: {
+            sheet,
+            onConnect: (sheetId: number) => {
+              // Handle connection from sheet
+            },
+            onViewData: handleViewSheetData
+          },
+        })
+      })
+
+      // Add transformation step nodes
+      transformationSteps.forEach((step) => {
+        // Check if there's a saved position for this step
+        const savedNode = savedLayout?.nodes?.find((n: any) => n.id === `step-${step.id}`)
+        const position = savedNode?.position || step.canvas_position || { x: 400, y: 200 }
+        
+        initialNodes.push({
+          id: `step-${step.id}`,
+          type: 'transformationNode',
+          position,
+        data: {
+          step,
+          onUpdate: (stepId: number, updates: any) => onUpdateTransformationStep(stepId, updates),
+          onExecute: (stepId: number) => onExecuteStep(stepId),
+          onViewData: handleViewTransformationData,
+          onDelete: onDeleteTransformationStep ? handleDeleteTransformationStep : undefined
+        },
+      })
+    })
+
+    // Only update nodes if there's a meaningful difference, but preserve positions
+    setNodes(prevNodes => {
+      const hasChanges = prevNodes.length !== initialNodes.length ||
+        prevNodes.some(prevNode => {
+          const newNode = initialNodes.find(n => n.id === prevNode.id)
+          if (!newNode) return true
+          
+          // For transformation nodes, check if data has actually changed
+          if (newNode.type === 'transformationNode' && prevNode.type === 'transformationNode') {
+            const prevStep = prevNode.data.step
+            const newStep = newNode.data.step
+            return prevStep.status !== newStep.status || 
+                   prevStep.code_explanation !== newStep.code_explanation ||
+                   prevStep.error_message !== newStep.error_message ||
+                   prevStep.step_name !== newStep.step_name
+          }
+          return false
+        })
+      
+      if (hasChanges) {
+        // Preserve existing positions when updating
+        return initialNodes.map(newNode => {
+          const existingNode = prevNodes.find(n => n.id === newNode.id)
+          if (existingNode) {
+            // Preserve the current position unless it's a brand new node
+            return {
+              ...newNode,
+              position: existingNode.position
+            }
+          }
+          return newNode
+        })
+      }
+      
+      return prevNodes
+    })
+    }
+    
+    initializeCanvas()
+  }, [sheets, transformationSteps, onUpdateTransformationStep, onExecuteStep, projectId, setEdges])
+
+  const onConnect = useCallback(
+    (params: Connection) => {
+      setEdges((eds) => addEdge(params, eds))
+      setHasUnsavedChanges(true)
+      // Save connections immediately after creating them
+      setTimeout(() => {
+        saveCanvasLayout()
+      }, 100)
+    },
+    [setEdges, saveCanvasLayout]
+  )
+
+  const onPaneClick = useCallback((event: React.MouseEvent) => {
+    // Only show modal if clicking on empty space
+    const target = event.target as HTMLElement
+    if (target.classList.contains('react-flow__pane')) {
+      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+      setCreateModalPosition({
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top
+      })
+      setShowCreateModal(true)
+    }
+  }, [])
+
+  const handleCreateStep = async () => {
+    if (!newStepName.trim() || !newStepPrompt.trim()) return
+
+    try {
+      // Parse selected upstream nodes into sheet IDs and step IDs
+      const upstream_sheet_ids: number[] = []
+      const upstream_step_ids: number[] = []
+
+      selectedUpstreamNodes.forEach(nodeId => {
+        if (nodeId.startsWith('sheet-')) {
+          upstream_sheet_ids.push(parseInt(nodeId.replace('sheet-', '')))
+        } else if (nodeId.startsWith('step-')) {
+          upstream_step_ids.push(parseInt(nodeId.replace('step-', '')))
+        }
+      })
+
+      await onCreateTransformationStep({
+        step_name: newStepName,
+        user_prompt: newStepPrompt,
+        output_table_name: newOutputTableName.trim() || undefined,
+        upstream_sheet_ids,
+        upstream_step_ids,
+        canvas_position: createModalPosition
+      })
+
+      // Reset modal
+      setShowCreateModal(false)
+      setNewStepName('')
+      setNewStepPrompt('')
+      setNewOutputTableName('')
+      setSelectedUpstreamNodes([])
+    } catch (error) {
+      console.error('Failed to create transformation step:', error)
+    }
+  }
+
+  const handleExecuteAll = async () => {
+    if (!onExecuteAll || isExecutingAll) return
+    
+    try {
+      setIsExecutingAll(true)
+      await onExecuteAll()
+    } catch (error) {
+      console.error('Failed to execute all transformations:', error)
+    } finally {
+      setIsExecutingAll(false)
+    }
+  }
+
+  const handleViewSheetData = (sheetId: number, sheetName: string) => {
+    setDataViewerSource({
+      id: `sheet-${sheetId}`,
+      type: 'sheet',
+      name: sheetName
+    })
+    setDataViewerOpen(true)
+  }
+
+  const handleViewTransformationData = (stepId: number, stepName: string, status: string) => {
+    if (status !== 'completed') return
+    
+    setDataViewerSource({
+      id: `transform-${stepId}`,
+      type: 'transformation',
+      name: `${stepName} Output`,
+      transformationStep: stepName
+    })
+    setDataViewerOpen(true)
+  }
+
+  const handleDeleteTransformationStep = async (stepId: number) => {
+    if (!onDeleteTransformationStep) return
+
+    // Show confirmation dialog
+    if (window.confirm('Are you sure you want to delete this transformation step? This action cannot be undone.')) {
+      try {
+        await onDeleteTransformationStep(stepId)
+      } catch (error) {
+        console.error('Failed to delete transformation step:', error)
+        alert('Failed to delete transformation step. Please try again.')
+      }
+    }
+  }
+
+  const onNodeDragStop = useCallback(
+    (event: React.MouseEvent, node: Node) => {
+      // Update the position in the database immediately
+      if (node.id.startsWith('step-')) {
+        const stepId = parseInt(node.id.replace('step-', ''))
+        onUpdateTransformationStep(stepId, {
+          canvas_position: node.position
+        }).catch(error => {
+          console.error('Failed to update node position:', error)
+        })
+      }
+      
+      // Also trigger auto-save for the overall layout
+      setHasUnsavedChanges(true)
+      // Save immediately after drag stop
+      setTimeout(() => {
+        saveCanvasLayout()
+      }, 100)
+    },
+    [onUpdateTransformationStep, saveCanvasLayout]
+  )
+
+  // Context menu handlers
+  const handlePaneContextMenu = useCallback((event: React.MouseEvent) => {
+    event.preventDefault()
+    setContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+    })
+  }, [])
+
+  const handleCloseContextMenu = useCallback(() => {
+    setContextMenu(null)
+  }, [])
+
+  const handleCreateAITransformation = useCallback(() => {
+    if (contextMenu) {
+      // Center the modal on screen instead of using context menu position
+      const centerX = window.innerWidth / 2 - 192 // 192 is half of modal width (384px/w-96)
+      const centerY = window.innerHeight / 2 - 200 // Approximate half of modal height
+      setTransformModalPosition({ x: Math.max(20, centerX), y: Math.max(20, centerY) })
+      setShowCreateModal(true)
+    }
+  }, [contextMenu])
+
+  // AI Transformation modal drag functionality
+  const handleTransformModalMouseDown = useCallback((e: React.MouseEvent) => {
+    setIsTransformModalDragging(true)
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setTransformModalDragOffset({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    })
+  }, [])
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isTransformModalDragging) {
+        const newX = Math.max(0, Math.min(window.innerWidth - 384, e.clientX - transformModalDragOffset.x))
+        const newY = Math.max(0, Math.min(window.innerHeight - 100, e.clientY - transformModalDragOffset.y))
+        setTransformModalPosition({ x: newX, y: newY })
+      }
+    }
+
+    const handleMouseUp = () => {
+      setIsTransformModalDragging(false)
+    }
+
+    if (isTransformModalDragging) {
+      document.addEventListener('mousemove', handleMouseMove)
+      document.addEventListener('mouseup', handleMouseUp)
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove)
+        document.removeEventListener('mouseup', handleMouseUp)
+      }
+    }
+  }, [isTransformModalDragging, transformModalDragOffset])
+
+  const handleCreateJoin = useCallback(() => {
+    if (contextMenu) {
+      // Convert screen coordinates to canvas coordinates
+      const canvasRect = document.querySelector('.react-flow')?.getBoundingClientRect()
+      if (canvasRect) {
+        const canvasX = contextMenu.x - canvasRect.left - 100
+        const canvasY = contextMenu.y - canvasRect.top - 50
+        setJoinModalPosition({ x: Math.max(0, canvasX), y: Math.max(0, canvasY) })
+      } else {
+        setJoinModalPosition({ x: 200, y: 200 })
+      }
+      setShowJoinModal(true)
+    }
+  }, [contextMenu])
+
+  // Available tables for join (sheets + completed transformations)
+  const availableTables = useMemo(() => {
+    const tables = [
+      // Add sheets as available tables
+      ...sheets.map(sheet => ({
+        id: sheet.id,
+        name: sheet.title,
+        columns: sheet.columns
+      })),
+      // Add completed transformation steps as available tables
+      ...transformationSteps
+        .filter(step => step.status === 'completed')
+        .map(step => ({
+          id: step.id + 10000, // Offset to avoid conflicts with sheet IDs
+          name: step.step_name,
+          columns: step.output_columns || []
+        }))
+    ]
+    return tables
+  }, [sheets, transformationSteps])
+
+  const handleCreateJoinSubmit = useCallback(async (joinConfig: {
+    name: string
+    leftTable: number
+    rightTable: number
+    joinType: 'inner' | 'left' | 'right' | 'full'
+    joinKeys: { left: string; right: string }[]
+  }) => {
+    try {
+      // Determine table types and adjust IDs for backend
+      const leftTableData = availableTables.find(t => t.id === joinConfig.leftTable)
+      const rightTableData = availableTables.find(t => t.id === joinConfig.rightTable)
+      
+      if (!leftTableData || !rightTableData) {
+        throw new Error('Selected tables not found')
+      }
+      
+      // Determine if table is a sheet or transformation
+      const leftTableType = joinConfig.leftTable >= 10000 ? 'transformation' : 'sheet'
+      const rightTableType = joinConfig.rightTable >= 10000 ? 'transformation' : 'sheet'
+      
+      // Adjust IDs back to original values
+      const leftTableId = leftTableType === 'transformation' ? joinConfig.leftTable - 10000 : joinConfig.leftTable
+      const rightTableId = rightTableType === 'transformation' ? joinConfig.rightTable - 10000 : joinConfig.rightTable
+      
+      // Create join via backend API
+      const response = await fetch(`http://localhost:8000/projects/${projectId}/joins`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          project_id: projectId,
+          name: joinConfig.name,
+          left_table_id: leftTableId,
+          right_table_id: rightTableId,
+          left_table_type: leftTableType,
+          right_table_type: rightTableType,
+          join_type: joinConfig.joinType,
+          join_keys: joinConfig.joinKeys,
+          canvas_position: joinModalPosition
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.detail || 'Failed to create join')
+      }
+
+      const result = await response.json()
+      
+      // Create a new join node with the real backend ID
+      const newJoinNode: Node = {
+        id: `join-${result.join_id}`,
+        type: 'joinNode',
+        position: joinModalPosition,
+        data: {
+          join: {
+            id: result.join_id,
+            name: joinConfig.name,
+            leftTable: leftTableData.name,
+            rightTable: rightTableData.name,
+            joinType: joinConfig.joinType,
+            joinKeys: joinConfig.joinKeys,
+            status: 'pending' as const
+          },
+          onViewData: (joinId: number, joinName: string) => {
+            setDataViewerSource({
+              id: `join-${joinId}`,
+              type: 'project',
+              name: `${joinName} Output`
+            })
+            setDataViewerOpen(true)
+          },
+          onEdit: (joinId: number) => {
+            console.log('Edit join:', joinId)
+          },
+          onDelete: async (joinId: number) => {
+            if (window.confirm('Are you sure you want to delete this join? This action cannot be undone.')) {
+              try {
+                const deleteResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}`, {
+                  method: 'DELETE',
+                })
+                
+                if (deleteResponse.ok) {
+                  setNodes(nodes => nodes.filter(node => node.id !== `join-${joinId}`))
+                  setHasUnsavedChanges(true)
+                } else {
+                  alert('Failed to delete join. Please try again.')
+                }
+              } catch (error) {
+                console.error('Error deleting join:', error)
+                alert('Failed to delete join. Please try again.')
+              }
+            }
+          },
+          onExecute: async (joinId: number) => {
+            try {
+              setNodes(nodes => nodes.map(node => {
+                if (node.id === `join-${joinId}`) {
+                  return {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      join: {
+                        ...node.data.join,
+                        status: 'running'
+                      }
+                    }
+                  }
+                }
+                return node
+              }))
+
+              const executeResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}/execute`, {
+                method: 'POST',
+              })
+              
+              if (executeResponse.ok) {
+                const result = await executeResponse.json()
+                
+                setNodes(nodes => nodes.map(node => {
+                  if (node.id === `join-${joinId}`) {
+                    return {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        join: {
+                          ...node.data.join,
+                          status: 'completed'
+                        }
+                      }
+                    }
+                  }
+                  return node
+                }))
+                
+                alert(`Join executed successfully! ${result.row_count} rows created in ${result.execution_time_ms}ms`)
+              } else {
+                const error = await executeResponse.json()
+                
+                setNodes(nodes => nodes.map(node => {
+                  if (node.id === `join-${joinId}`) {
+                    return {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        join: {
+                          ...node.data.join,
+                          status: 'failed'
+                        }
+                      }
+                    }
+                  }
+                  return node
+                }))
+                
+                alert(`Failed to execute join: ${error.detail}`)
+              }
+            } catch (error) {
+              console.error('Error executing join:', error)
+              
+              setNodes(nodes => nodes.map(node => {
+                if (node.id === `join-${joinId}`) {
+                  return {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      join: {
+                        ...node.data.join,
+                        status: 'failed'
+                      }
+                    }
+                  }
+                }
+                return node
+              }))
+              
+              alert('Failed to execute join. Please try again.')
+            }
+          }
+        }
+      }
+
+      // Add the node to the canvas
+      setNodes(nodes => [...nodes, newJoinNode])
+      setHasUnsavedChanges(true)
+      
+    } catch (error) {
+      console.error('Error creating join:', error)
+      alert(`Failed to create join: ${error.message}`)
+    }
+  }, [joinModalPosition, availableTables, projectId])
+
+  return (
+    <div className="h-full w-full relative">
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        onPaneClick={onPaneClick}
+        onPaneContextMenu={handlePaneContextMenu}
+        onNodeDragStop={onNodeDragStop}
+        nodeTypes={nodeTypes}
+        className="bg-gray-50"
+        minZoom={0.2}
+        maxZoom={4}
+        defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+      >
+        <Controls />
+        <MiniMap
+          nodeColor={(node) => {
+            switch (node.type) {
+              case 'sheetNode':
+                return '#3B82F6'
+              case 'transformationNode':
+                return '#10B981'
+              default:
+                return '#6B7280'
+            }
+          }}
+        />
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
+      </ReactFlow>
+
+      {/* Canvas Toolbar */}
+      <div className="absolute top-4 left-4 bg-white rounded-lg shadow-lg border p-3 flex items-center gap-2">
+        <button
+          onClick={handleExecuteAll}
+          disabled={isExecutingAll || transformationSteps.length === 0}
+          className={`flex items-center gap-2 px-3 py-2 rounded-lg font-medium transition-colors ${
+            isExecutingAll || transformationSteps.length === 0
+              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              : 'bg-blue-600 hover:bg-blue-700 text-white'
+          }`}
+        >
+          <Play size={16} className={isExecutingAll ? 'animate-spin' : ''} />
+          {isExecutingAll ? 'Running All...' : 'Run All'}
+          {transformationSteps.length > 0 && !isExecutingAll && (
+            <span className="text-xs bg-white/20 px-1.5 py-0.5 rounded">
+              {transformationSteps.length}
+            </span>
+          )}
+        </button>
+      </div>
+      
+      {/* Save Status Indicator */}
+      <div className="absolute top-4 right-4 bg-white rounded-lg shadow-sm border px-3 py-2 text-xs">
+        {isSaving ? (
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+            <span className="text-blue-600">Saving...</span>
+          </div>
+        ) : hasUnsavedChanges ? (
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
+            <span className="text-orange-600">Unsaved changes</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+            <span className="text-green-600">All changes saved</span>
+          </div>
+        )}
+      </div>
+
+      {/* Instructions */}
+      {nodes.length === sheets.length && transformationSteps.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="bg-white rounded-lg shadow-lg border p-6 max-w-md text-center">
+            <Zap className="mx-auto text-green-600 mb-3" size={48} />
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">
+              Create Your First Transform
+            </h3>
+            <p className="text-gray-600 mb-4">
+              Right-click on the canvas to create transformations or joins. 
+              Describe what you want to do in plain English!
+            </p>
+            <div className="text-xs text-gray-500">
+              Examples: "Remove empty rows", "Add a column that combines first and last name", "Filter for active users"
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={handleCloseContextMenu}
+          onCreateAITransformation={handleCreateAITransformation}
+          onCreateJoin={handleCreateJoin}
+        />
+      )}
+
+      {/* Create Transformation Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div 
+            className="bg-white rounded-lg shadow-xl max-h-[80vh] overflow-y-auto absolute"
+            style={{
+              left: transformModalPosition.x,
+              top: transformModalPosition.y,
+              width: '384px',
+              cursor: isTransformModalDragging ? 'grabbing' : 'default'
+            }}
+          >
+            <div 
+              className="flex items-center justify-between p-6 border-b border-gray-200 cursor-grab active:cursor-grabbing"
+              onMouseDown={handleTransformModalMouseDown}
+            >
+              <div className="flex items-center gap-2">
+                <Zap className="text-green-600" size={20} />
+                <h3 className="text-lg font-semibold text-gray-900">Create AI Transformation</h3>
+              </div>
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Step Name
+                </label>
+                <input
+                  type="text"
+                  value={newStepName}
+                  onChange={(e) => setNewStepName(e.target.value)}
+                  placeholder="e.g., Clean Data, Combine Names, Filter Active Users"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Transformation Description
+                </label>
+                <textarea
+                  value={newStepPrompt}
+                  onChange={(e) => setNewStepPrompt(e.target.value)}
+                  placeholder="Describe what you want to do in plain English. For example: 'Delete the xyz column and add a new column that combines first_name and last_name columns with a space between them'"
+                  rows={4}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Output Table Name (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={newOutputTableName}
+                  onChange={(e) => setNewOutputTableName(e.target.value)}
+                  placeholder="e.g., cleaned_customer_data, monthly_sales_summary"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  If left empty, a name will be generated automatically. Use lowercase letters, numbers, and underscores only.
+                </p>
+              </div>
+
+              {/* Upstream Node Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Data Source <span className="text-red-500">*</span>
+                </label>
+                <p className="text-sm text-gray-600 mb-3">
+                  Select which data source(s) this transformation should operate on:
+                </p>
+                <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-200 rounded-lg p-3">
+                  {/* Sheet Nodes */}
+                  {sheets.map((sheet) => (
+                    <label key={`sheet-${sheet.id}`} className="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedUpstreamNodes.includes(`sheet-${sheet.id}`)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedUpstreamNodes(prev => [...prev, `sheet-${sheet.id}`])
+                          } else {
+                            setSelectedUpstreamNodes(prev => prev.filter(id => id !== `sheet-${sheet.id}`))
+                          }
+                        }}
+                        className="mr-3 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                      />
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 bg-blue-600 rounded"></div>
+                        <span className="font-medium text-gray-900">{sheet.title}</span>
+                        <span className="text-sm text-gray-500">(Original Sheet)</span>
+                      </div>
+                    </label>
+                  ))}
+
+                  {/* Transformation Step Nodes */}
+                  {transformationSteps.filter(step => step.status === 'completed').map((step) => (
+                    <label key={`step-${step.id}`} className="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedUpstreamNodes.includes(`step-${step.id}`)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedUpstreamNodes(prev => [...prev, `step-${step.id}`])
+                          } else {
+                            setSelectedUpstreamNodes(prev => prev.filter(id => id !== `step-${step.id}`))
+                          }
+                        }}
+                        className="mr-3 h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded"
+                      />
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 bg-green-600 rounded"></div>
+                        <span className="font-medium text-gray-900">{step.step_name}</span>
+                        <span className="text-sm text-gray-500">(Transformation Output)</span>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                {selectedUpstreamNodes.length === 0 && (
+                  <p className="text-sm text-red-600 mt-1">Please select at least one data source</p>
+                )}
+              </div>
+
+              <div className="text-xs text-gray-500 bg-gray-50 p-3 rounded">
+                <strong>Tips:</strong>
+                <ul className="mt-1 space-y-1">
+                  <li>• Be specific about column names</li>
+                  <li>• Mention the exact operations you want</li>
+                  <li>• Use examples when helpful</li>
+                </ul>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex justify-end gap-2 p-6 border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setShowCreateModal(false)
+                  setNewStepName('')
+                  setNewStepPrompt('')
+                  setNewOutputTableName('')
+                  setSelectedUpstreamNodes([])
+                }}
+                className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateStep}
+                disabled={!newStepName.trim() || !newStepPrompt.trim() || selectedUpstreamNodes.length === 0}
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white rounded-lg font-medium transition-colors"
+              >
+                Generate Transform
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Data Viewer Modal */}
+      {dataViewerOpen && dataViewerSource && (
+        <DataViewer
+          isOpen={dataViewerOpen}
+          onClose={() => {
+            setDataViewerOpen(false)
+            setDataViewerSource(null)
+          }}
+          sourceId={dataViewerSource.id}
+          sourceType={dataViewerSource.type}
+          sourceName={dataViewerSource.name}
+          transformationStep={dataViewerSource.transformationStep}
+        />
+      )}
+
+      {/* Join Modal */}
+      <JoinModal
+        isOpen={showJoinModal}
+        onClose={() => setShowJoinModal(false)}
+        onCreateJoin={handleCreateJoinSubmit}
+        position={joinModalPosition}
+        availableTables={availableTables}
+      />
+    </div>
+  )
+}
