@@ -5,7 +5,7 @@ import { Clock, Calendar, Play, ChevronDown, ChevronRight, AlertTriangle, CheckC
 
 interface AutomationConfig {
   enabled: boolean
-  frequency: 'daily' | 'weekly' | 'monthly' | 'custom'
+  frequency: 'daily' | 'weekly' | 'monthly' | 'manual'
   time: string
   dayOfWeek?: number  // 0-6 for weekly
   dayOfMonth?: number  // 1-31 for monthly
@@ -89,7 +89,7 @@ export default function AutomationPanel({ projectId, projectName }: AutomationPa
   ]
 
   const getNextRunTime = () => {
-    if (!config.enabled) return null
+    if (!config.enabled || config.frequency === 'manual') return null
     
     const now = new Date()
     const nextRun = new Date()
@@ -115,6 +115,8 @@ export default function AutomationPanel({ projectId, projectName }: AutomationPa
           nextRun.setMonth(nextRun.getMonth() + 1)
         }
         break
+      case 'manual':
+        return null
     }
     
     return nextRun
@@ -203,7 +205,7 @@ export default function AutomationPanel({ projectId, projectName }: AutomationPa
                     { value: 'daily', label: 'Daily' },
                     { value: 'weekly', label: 'Weekly' },
                     { value: 'monthly', label: 'Monthly' },
-                    { value: 'custom', label: 'Custom' }
+                    { value: 'manual', label: 'Manual' }
                   ].map(({ value, label }) => (
                     <button
                       key={value}

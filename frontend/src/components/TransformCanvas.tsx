@@ -188,7 +188,7 @@ export default function TransformCanvas({
         if (isManual) {
           setLastSaved(new Date())
         }
-        console.log(isManual ? 'Canvas layout saved successfully' : 'Canvas layout auto-saved successfully')
+        (isManual ? 'Canvas layout saved successfully' : 'Canvas layout auto-saved successfully')
       } else {
         console.error('Failed to save canvas layout')
       }
@@ -237,11 +237,8 @@ export default function TransformCanvas({
         const response = await fetch(`http://localhost:8000/projects/${projectId}`)
         if (response.ok) {
           const project = await response.json()
-          console.log('DEBUG: Loaded project:', project)
-          console.log('DEBUG: Project keys:', Object.keys(project))
-          console.log('DEBUG: canvas_layout value:', project.canvas_layout)
           if (project.canvas_layout) {
-            console.log('DEBUG: Found canvas_layout:', project.canvas_layout)
+            ('DEBUG: Found canvas_layout:', project.canvas_layout)
             savedLayout = project.canvas_layout
             // Load saved connections
             if (project.canvas_layout.connections) {
@@ -252,20 +249,20 @@ export default function TransformCanvas({
                 sourceHandle: conn.sourceHandle,
                 targetHandle: conn.targetHandle
               }))
-              console.log('DEBUG: Setting edges:', savedEdges)
+              ('DEBUG: Setting edges:', savedEdges)
               setEdges(savedEdges)
             }
           } else {
-            console.log('DEBUG: No canvas_layout found in project')
+            ('DEBUG: No canvas_layout found in project')
           }
         } else {
-          console.log('DEBUG: Failed to fetch project:', response.status)
+          ('DEBUG: Failed to fetch project:', response.status)
         }
       } catch (error) {
         console.error('Error loading canvas layout:', error)
       }
       
-      console.log('DEBUG: savedLayout received in initializeCanvas:', savedLayout)
+      ('DEBUG: savedLayout received in initializeCanvas:', savedLayout)
       const initialNodes: Node[] = []
     
       // Add sheet nodes
@@ -273,7 +270,7 @@ export default function TransformCanvas({
         // Check if there's a saved position for this sheet
         const savedNode = savedLayout?.nodes?.find((n: any) => n.id === `sheet-${sheet.id}`)
         const position = savedNode?.position || { x: 50, y: 50 + index * 150 }
-        console.log(`DEBUG: Sheet ${sheet.id} - savedNode:`, savedNode, 'position:', position)
+        (`DEBUG: Sheet ${sheet.id} - savedNode:`, savedNode, 'position:', position)
         
         initialNodes.push({
           id: `sheet-${sheet.id}`,
@@ -321,7 +318,7 @@ export default function TransformCanvas({
         const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
         if (joinsResponse.ok) {
           const joinsData = await joinsResponse.json()
-          console.log('DEBUG: Loaded joins:', joinsData.joins)
+          ('DEBUG: Loaded joins:', joinsData.joins)
           
           joinsData.joins.forEach((join: any) => {
             const savedNode = savedLayout?.nodes?.find((n: any) => n.id === `join-${join.id}`)
@@ -353,7 +350,8 @@ export default function TransformCanvas({
                   joinType: join.join_type,
                   joinKeys: join.join_keys,
                   status: join.status || 'pending',
-                  outputTableName: join.output_table_name
+                  outputTableName: join.output_table_name,
+                  errorMessage: join.error_message
                 },
                 onViewData: (joinId: number, joinName: string) => {
                   setDataViewerSource({
@@ -364,16 +362,43 @@ export default function TransformCanvas({
                   setDataViewerOpen(true)
                 },
                 onEdit: (joinId: number) => {
-                  console.log('Edit join:', joinId)
+                  ('Edit join:', joinId)
                 },
                 onUpdateJoin: async (joinId: number, joinConfig: any) => {
                   try {
+                    // Transform data to match backend API format
+                    const leftTableData = availableTables.find(t => t.id === joinConfig.leftTable)
+                    const rightTableData = availableTables.find(t => t.id === joinConfig.rightTable)
+                    
+                    if (!leftTableData || !rightTableData) {
+                      throw new Error('Selected tables not found')
+                    }
+                    
+                    // Determine if table is a sheet or transformation
+                    const leftTableType = joinConfig.leftTable >= 10000 ? 'transformation' : 'sheet'
+                    const rightTableType = joinConfig.rightTable >= 10000 ? 'transformation' : 'sheet'
+                    
+                    // Adjust IDs back to original values
+                    const leftTableId = leftTableType === 'transformation' ? joinConfig.leftTable - 10000 : joinConfig.leftTable
+                    const rightTableId = rightTableType === 'transformation' ? joinConfig.rightTable - 10000 : joinConfig.rightTable
+                    
                     const response = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}`, {
                       method: 'PUT',
                       headers: {
                         'Content-Type': 'application/json',
                       },
-                      body: JSON.stringify(joinConfig),
+                      body: JSON.stringify({
+                        project_id: projectId,
+                        name: joinConfig.name,
+                        output_table_name: joinConfig.outputTableName,
+                        left_table_id: leftTableId,
+                        right_table_id: rightTableId,
+                        left_table_type: leftTableType,
+                        right_table_type: rightTableType,
+                        join_type: joinConfig.joinType,
+                        join_keys: joinConfig.joinKeys,
+                        canvas_position: { x: 0, y: 0 } // Preserve existing position or use default
+                      }),
                     })
                     
                     if (response.ok) {
@@ -381,16 +406,21 @@ export default function TransformCanvas({
                       const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
                       if (joinsResponse.ok) {
                         const joinsData = await joinsResponse.json()
-                        console.log('Refreshed joins after update:', joinsData.joins)
+                        ('Refreshed joins after update:', joinsData.joins)
                         // The useEffect will handle updating the nodes
                       }
                     } else {
-                      const error = await response.json()
-                      alert(`Failed to update join: ${error.detail}`)
+                      try {
+                        const error = await response.json()
+                        const errorMessage = error.detail || error.message || JSON.stringify(error)
+                        alert(`Failed to update join: ${errorMessage}`)
+                      } catch (parseError) {
+                        alert(`Failed to update join: HTTP ${response.status} ${response.statusText}`)
+                      }
                     }
                   } catch (error) {
                     console.error('Error updating join:', error)
-                    alert('Failed to update join. Please try again.')
+                    alert(`Failed to update join: ${error instanceof Error ? error.message : 'Please try again.'}`)
                   }
                 },
                 availableTables,
@@ -458,21 +488,49 @@ export default function TransformCanvas({
                     } else {
                       const error = await executeResponse.json()
                       
-                      setNodes(nodes => nodes.map(node => {
-                        if (node.id === `join-${joinId}`) {
-                          return {
-                            ...node,
-                            data: {
-                              ...node.data,
-                              join: {
-                                ...node.data.join,
-                                status: 'failed'
+                      // Fetch the updated join data to get the error message
+                      try {
+                        const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
+                        if (joinsResponse.ok) {
+                          const joinsData = await joinsResponse.json()
+                          const failedJoin = joinsData.joins.find((j: any) => j.id === joinId)
+                          
+                          setNodes(nodes => nodes.map(node => {
+                            if (node.id === `join-${joinId}`) {
+                              return {
+                                ...node,
+                                data: {
+                                  ...node.data,
+                                  join: {
+                                    ...node.data.join,
+                                    status: 'failed',
+                                    errorMessage: failedJoin?.error_message || error.detail || 'Join execution failed'
+                                  }
+                                }
+                              }
+                            }
+                            return node
+                          }))
+                        }
+                      } catch (fetchError) {
+                        // Fallback to just setting status if fetch fails
+                        setNodes(nodes => nodes.map(node => {
+                          if (node.id === `join-${joinId}`) {
+                            return {
+                              ...node,
+                              data: {
+                                ...node.data,
+                                join: {
+                                  ...node.data.join,
+                                  status: 'failed',
+                                  errorMessage: error.detail || 'Join execution failed'
+                                }
                               }
                             }
                           }
-                        }
-                        return node
-                      }))
+                          return node
+                        }))
+                      }
                       
                       alert(`Failed to execute join: ${error.detail}`)
                     }
@@ -487,7 +545,8 @@ export default function TransformCanvas({
                             ...node.data,
                             join: {
                               ...node.data.join,
-                              status: 'failed'
+                              status: 'failed',
+                              errorMessage: error instanceof Error ? error.message : 'Join execution failed'
                             }
                           }
                         }
@@ -891,16 +950,43 @@ export default function TransformCanvas({
             setDataViewerOpen(true)
           },
           onEdit: (joinId: number) => {
-            console.log('Edit join:', joinId)
+            ('Edit join:', joinId)
           },
           onUpdateJoin: async (joinId: number, joinConfig: any) => {
             try {
+              // Transform data to match backend API format
+              const leftTableData = availableTables.find(t => t.id === joinConfig.leftTable)
+              const rightTableData = availableTables.find(t => t.id === joinConfig.rightTable)
+              
+              if (!leftTableData || !rightTableData) {
+                throw new Error('Selected tables not found')
+              }
+              
+              // Determine if table is a sheet or transformation
+              const leftTableType = joinConfig.leftTable >= 10000 ? 'transformation' : 'sheet'
+              const rightTableType = joinConfig.rightTable >= 10000 ? 'transformation' : 'sheet'
+              
+              // Adjust IDs back to original values
+              const leftTableId = leftTableType === 'transformation' ? joinConfig.leftTable - 10000 : joinConfig.leftTable
+              const rightTableId = rightTableType === 'transformation' ? joinConfig.rightTable - 10000 : joinConfig.rightTable
+              
               const response = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}`, {
                 method: 'PUT',
                 headers: {
                   'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(joinConfig),
+                body: JSON.stringify({
+                  project_id: projectId,
+                  name: joinConfig.name,
+                  output_table_name: joinConfig.outputTableName,
+                  left_table_id: leftTableId,
+                  right_table_id: rightTableId,
+                  left_table_type: leftTableType,
+                  right_table_type: rightTableType,
+                  join_type: joinConfig.joinType,
+                  join_keys: joinConfig.joinKeys,
+                  canvas_position: { x: 0, y: 0 } // Preserve existing position or use default
+                }),
               })
               
               if (response.ok) {
@@ -908,16 +994,21 @@ export default function TransformCanvas({
                 const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
                 if (joinsResponse.ok) {
                   const joinsData = await joinsResponse.json()
-                  console.log('Refreshed joins after update:', joinsData.joins)
+                  ('Refreshed joins after update:', joinsData.joins)
                   // The useEffect will handle updating the nodes
                 }
               } else {
-                const error = await response.json()
-                alert(`Failed to update join: ${error.detail}`)
+                try {
+                  const error = await response.json()
+                  const errorMessage = error.detail || error.message || JSON.stringify(error)
+                  alert(`Failed to update join: ${errorMessage}`)
+                } catch (parseError) {
+                  alert(`Failed to update join: HTTP ${response.status} ${response.statusText}`)
+                }
               }
             } catch (error) {
               console.error('Error updating join:', error)
-              alert('Failed to update join. Please try again.')
+              alert(`Failed to update join: ${error instanceof Error ? error.message : 'Please try again.'}`)
             }
           },
           availableTables,

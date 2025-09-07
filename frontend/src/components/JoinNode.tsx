@@ -3,7 +3,7 @@
 import React, { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Handle, Position, NodeResizer } from 'reactflow'
-import { Link, Table, Trash2, Edit3, Play, Sparkles, Loader2 } from 'lucide-react'
+import { Link, Table, Trash2, Edit3, Play, Sparkles, Loader2, AlertTriangle } from 'lucide-react'
 import JoinModal from './JoinModal'
 
 interface JoinNodeData {
@@ -20,6 +20,7 @@ interface JoinNodeData {
     joinKeys: { left: string; right: string }[]
     status: 'pending' | 'completed' | 'failed' | 'running'
     outputTableName?: string
+    errorMessage?: string
   }
   onViewData?: (joinId: number, joinName: string) => void
   onEdit?: (joinId: number) => void
@@ -61,6 +62,16 @@ export default function JoinNode({ data, selected }: JoinNodeProps) {
       case 'pending':
       default:
         return 'bg-purple-500'
+    }
+  }
+
+  const getStatusDisplayText = (status: string) => {
+    switch (status) {
+      case 'pending': return 'Run pending'
+      case 'running': return 'Running'
+      case 'completed': return 'Completed'
+      case 'failed': return 'Failed'
+      default: return 'Run pending'
     }
   }
 
@@ -147,8 +158,8 @@ export default function JoinNode({ data, selected }: JoinNodeProps) {
           <h3 className="font-semibold text-sm truncate text-white" title={join.name}>
             {join.name}
           </h3>
-          <div className="text-xs opacity-75 capitalize text-white">
-            {join.status} • {join.joinType.toUpperCase()} JOIN
+          <div className="text-xs opacity-75 text-white">
+            {getStatusDisplayText(join.status)} • {join.joinType.toUpperCase()} JOIN
           </div>
         </div>
       </div>
@@ -187,6 +198,19 @@ export default function JoinNode({ data, selected }: JoinNodeProps) {
               </div>
             </div>
           )}
+
+          {/* Error Message */}
+          {join.status === 'failed' && join.errorMessage && (
+            <div>
+              <div className="text-xs font-medium text-red-700 mb-1 flex items-center gap-1">
+                <AlertTriangle size={12} />
+                Error Message:
+              </div>
+              <div className="text-sm bg-red-50 border border-red-200 p-2 rounded text-red-800">
+                {join.errorMessage}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Actions */}
@@ -201,14 +225,20 @@ export default function JoinNode({ data, selected }: JoinNodeProps) {
             </button>
             {onViewData && (
               <button
-                onClick={join.status === 'completed' ? () => onViewData(join.id, join.name) : undefined}
+                onClick={join.status === 'completed' && !join.errorMessage ? () => onViewData(join.id, join.name) : undefined}
                 className={`p-2 rounded transition-colors ${
-                  join.status === 'completed' 
+                  join.status === 'completed' && !join.errorMessage
                     ? 'text-blue-500 hover:text-blue-700 hover:bg-blue-50' 
                     : 'text-gray-400 cursor-not-allowed'
                 }`}
-                title={join.status === 'completed' ? "View output data" : "Run the node to see the results"}
-                disabled={join.status !== 'completed'}
+                title={
+                  join.status === 'completed' && !join.errorMessage
+                    ? "View output data" 
+                    : join.errorMessage 
+                      ? "Cannot view data - join has errors" 
+                      : "Run the node to see the results"
+                }
+                disabled={join.status !== 'completed' || !!join.errorMessage}
               >
                 <Table size={14} />
               </button>

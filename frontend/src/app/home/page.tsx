@@ -19,7 +19,9 @@ import {
   ExternalLink,
   PieChart,
   Users,
-  Activity
+  Activity,
+  Play,
+  Loader2
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import DashboardLayout from '@/components/DashboardLayout'
@@ -69,6 +71,7 @@ export default function HomePage() {
   const [deleteConfirmSheet, setDeleteConfirmSheet] = useState<ConnectedSheet | null>(null)
   const [deletingProjects, setDeletingProjects] = useState<Set<number>>(new Set())
   const [deleteConfirmProject, setDeleteConfirmProject] = useState<TransformationProject | null>(null)
+  const [runningProjects, setRunningProjects] = useState<Set<number>>(new Set())
   const [stats, setStats] = useState({
     totalSheets: 0,
     totalProjects: 0,
@@ -289,6 +292,41 @@ export default function HomePage() {
 
   const confirmDeleteProject = (project: TransformationProject) => {
     setDeleteConfirmProject(project)
+  }
+
+  const handleRunProject = async (project: TransformationProject) => {
+    setRunningProjects(prev => new Set([...prev, project.id]))
+    
+    try {
+      const response = await fetch(`http://localhost:8000/projects/${project.id}/execute-all`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Failed to execute all transformations')
+      }
+
+      const result = await response.json()
+      
+      // Show success message
+      alert(`✅ ${result.message}\n\nExecuted: ${result.executed_steps?.length || 0} operations\nFailed: ${result.failed_steps?.length || 0} operations`)
+
+      // Refresh data to show updated stats
+      await fetchAllData()
+    } catch (error) {
+      console.error('Error running project:', error)
+      alert(`Error running project: ${error instanceof Error ? error.message : 'Unknown error occurred'}`)
+    } finally {
+      setRunningProjects(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(project.id)
+        return newSet
+      })
+    }
   }
 
   const formatDate = (dateString: string) => {
@@ -563,6 +601,18 @@ export default function HomePage() {
                         </div>
                         
                         <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleRunProject(project)}
+                            disabled={runningProjects.has(project.id)}
+                            className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white p-1 rounded transition-colors"
+                            title="Run all transformations"
+                          >
+                            {runningProjects.has(project.id) ? (
+                              <Loader2 size={12} className="animate-spin" />
+                            ) : (
+                              <Play size={12} />
+                            )}
+                          </button>
                           <button
                             onClick={() => router.push(`/transform/${project.id}/canvas`)}
                             className="bg-green-600 hover:bg-green-700 text-white p-1 rounded transition-colors"

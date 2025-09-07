@@ -106,6 +106,17 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
     }
   }
 
+  const getStatusDisplayText = (status: string) => {
+    switch (status) {
+      case 'draft': return 'Run pending'
+      case 'ready': return 'Ready'
+      case 'running': return 'Running'
+      case 'completed': return 'Completed'
+      case 'failed': return 'Failed'
+      default: return 'Run pending'
+    }
+  }
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'running': return <Pause size={14} className="animate-spin" />
@@ -286,8 +297,8 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
           <h3 className="font-semibold text-sm truncate" title={step.step_name}>
             {step.step_name}
           </h3>
-          <div className="text-xs opacity-75 capitalize">
-            {step.status} {step.execution_time_ms && `• ${step.execution_time_ms}ms`}
+          <div className="text-xs opacity-75">
+            {getStatusDisplayText(step.status)} {step.execution_time_ms && `• ${step.execution_time_ms}ms`}
           </div>
         </div>
       </div>
@@ -372,14 +383,20 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
             </button>
             {onViewData && (
               <button
-                onClick={step.status === 'completed' ? () => onViewData(step.id, step.step_name, step.status) : undefined}
+                onClick={step.status === 'completed' && !step.error_message ? () => onViewData(step.id, step.step_name, step.status) : undefined}
                 className={`p-2 rounded transition-colors ${
-                  step.status === 'completed' 
+                  step.status === 'completed' && !step.error_message
                     ? 'text-blue-500 hover:text-blue-700 hover:bg-blue-50' 
                     : 'text-gray-400 cursor-not-allowed'
                 }`}
-                title={step.status === 'completed' ? "View output data" : "Run the node to see the results"}
-                disabled={step.status !== 'completed'}
+                title={
+                  step.status === 'completed' && !step.error_message
+                    ? "View output data" 
+                    : step.error_message 
+                      ? "Cannot view data - step has errors" 
+                      : "Run the node to see the results"
+                }
+                disabled={step.status !== 'completed' || !!step.error_message}
               >
                 <Table size={14} />
               </button>
