@@ -7,7 +7,7 @@ interface DataViewerProps {
   isOpen: boolean
   onClose: () => void
   sourceId: string
-  sourceType: 'sheet' | 'transformation' | 'project'
+  sourceType: 'sheet' | 'transformation' | 'project' | 'join'
   sourceName: string
   transformationStep?: string
 }
@@ -78,6 +78,19 @@ export default function DataViewer({
           const projectId = sourceId.replace('project-', '')
           url = `http://localhost:8000/projects/${projectId}/data`
           break
+        case 'join':
+          const joinId = sourceId.replace('join-', '')
+          // We need to get the project ID somehow - let's extract it from the URL or pass it
+          // For now, we'll use a different approach - get it from the current URL
+          const currentUrl = window.location.pathname
+          const projectIdMatch = currentUrl.match(/\/transform\/(\d+)\/canvas/)
+          if (projectIdMatch) {
+            const currentProjectId = projectIdMatch[1]
+            url = `http://localhost:8000/projects/${currentProjectId}/joins/${joinId}/data`
+          } else {
+            throw new Error('Cannot determine project ID for join data')
+          }
+          break
         default:
           throw new Error('Unknown source type')
       }
@@ -105,6 +118,8 @@ export default function DataViewer({
         return <Layers size={16} className="text-green-600" />
       case 'project':
         return <Database size={16} className="text-purple-600" />
+      case 'join':
+        return <Database size={16} className="text-purple-600" />
       default:
         return <Eye size={16} className="text-gray-600" />
     }
@@ -118,6 +133,8 @@ export default function DataViewer({
         return 'AI Transformation'
       case 'project':
         return 'Project Data'
+      case 'join':
+        return 'Join Result'
       default:
         return 'Data Source'
     }

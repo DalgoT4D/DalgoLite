@@ -208,7 +208,17 @@ Generate the transformation code following the rules in the system prompt."""
 
             # Execute the code in a controlled environment
             exec_globals = {"df": df, "pd": pd, "numpy": __import__("numpy")}
-            exec(code, exec_globals)
+            try:
+                exec(code, exec_globals)
+            except AttributeError as e:
+                # Handle common case where generated code tries to call string methods on numeric types
+                if 'zfill' in str(e) and 'float' in str(e):
+                    raise Exception(f"Generated code error: Trying to use zfill() on a numeric value. "
+                                  f"This usually happens when a column contains numbers but the code expects strings. "
+                                  f"Try converting to string first: df['column'].astype(str).str.zfill(n). "
+                                  f"Original error: {str(e)}")
+                else:
+                    raise e
 
             # Get the result
             result_df = exec_globals.get("df", df)

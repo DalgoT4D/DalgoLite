@@ -2,10 +2,11 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { ArrowLeft, Save, Play, Settings, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Save, Play, Settings, AlertCircle, Clock, X } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import DashboardLayout from '@/components/DashboardLayout'
 import TransformCanvas from '@/components/TransformCanvas'
+import AutomationPanel from '@/components/AutomationPanel'
 
 interface ConnectedSheet {
   id: number
@@ -54,8 +55,10 @@ export default function ProjectCanvasPage() {
   const [project, setProject] = useState<TransformationProject | null>(null)
   const [sheets, setSheets] = useState<ConnectedSheet[]>([])
   const [transformationSteps, setTransformationSteps] = useState<TransformationStep[]>([])
+  const [joins, setJoins] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [showAutomation, setShowAutomation] = useState(false)
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -93,6 +96,13 @@ export default function ProjectCanvasPage() {
       if (stepsResponse.ok) {
         const stepsData = await stepsResponse.json()
         setTransformationSteps(stepsData.steps)
+      }
+
+      // Fetch joins  
+      const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
+      if (joinsResponse.ok) {
+        const joinsData = await joinsResponse.json()
+        setJoins(joinsData.joins || [])
       }
 
     } catch (err) {
@@ -152,7 +162,7 @@ export default function ProjectCanvasPage() {
       }
 
       // Update local state instead of full refresh for minor updates
-      if (!updates.user_prompt && !updates.step_name) {
+      if (!updates.user_prompt && !updates.step_name && !updates.output_table_name) {
         // For canvas position updates, don't refresh everything
         return
       }
@@ -212,14 +222,10 @@ export default function ProjectCanvasPage() {
       const result = await response.json()
       
       // Show success message
-      alert(`✅ ${result.message}\n\nExecuted: ${result.executed_steps?.length || 0} steps\nFailed: ${result.failed_steps?.length || 0} steps`)
+      alert(`✅ ${result.message}\n\nExecuted: ${result.executed_steps?.length || 0} operations\nFailed: ${result.failed_steps?.length || 0} operations`)
 
-      // Only refresh transformation steps, not entire project data
-      const stepsResponse = await fetch(`http://localhost:8000/projects/${projectId}/ai-transformations`)
-      if (stepsResponse.ok) {
-        const stepsData = await stepsResponse.json()
-        setTransformationSteps(stepsData.steps)
-      }
+      // Refresh both transformation steps and joins
+      await fetchProjectData()
     } catch (err) {
       console.error('Error executing all transformations:', err)
       alert(err instanceof Error ? err.message : 'Failed to execute all transformations')
@@ -312,23 +318,59 @@ export default function ProjectCanvasPage() {
               <div className="text-sm text-gray-600">
                 {sheets.length} sheets • {transformationSteps.length} transforms
               </div>
+              <button
+                onClick={() => setShowAutomation(!showAutomation)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors ${
+                  showAutomation 
+                    ? 'bg-purple-50 border-purple-300 text-purple-700' 
+                    : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <Clock size={16} />
+                Automation
+              </button>
             </div>
           </div>
         </div>
       </header>
 
-      {/* Full-screen Canvas */}
-      <div className="bg-white" style={{height: 'calc(100vh - 80px)'}}>
-        <TransformCanvas
-          projectId={projectId}
-          sheets={sheets}
-          transformationSteps={transformationSteps}
-          onCreateTransformationStep={handleCreateTransformationStep}
-          onUpdateTransformationStep={handleUpdateTransformationStep}
-          onExecuteStep={handleExecuteStep}
-          onExecuteAll={handleExecuteAll}
-          onDeleteTransformationStep={handleDeleteTransformationStep}
-        />
+      {/* Main Content Area with Canvas and Sidebar */}
+      <div className="relative bg-white" style={{height: 'calc(100vh - 80px)'}}>
+        {/* Canvas */}
+        <div className={`transition-all duration-300 ${showAutomation ? 'pr-80' : ''}`} style={{height: '100%'}}>
+          <TransformCanvas
+            projectId={projectId}
+            sheets={sheets}
+            transformationSteps={transformationSteps}
+            joins={joins}
+            onCreateTransformationStep={handleCreateTransformationStep}
+            onUpdateTransformationStep={handleUpdateTransformationStep}
+            onExecuteStep={handleExecuteStep}
+            onExecuteAll={handleExecuteAll}
+            onDeleteTransformationStep={handleDeleteTransformationStep}
+          />
+        </div>
+
+        {/* Automation Sidebar */}
+        {showAutomation && (
+          <div className="fixed right-0 top-20 w-80 h-full bg-gray-50 border-l border-gray-200 overflow-y-auto z-30 transition-transform duration-300">
+            <div className="p-4">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-gray-900">Project Automation</h2>
+                <button
+                  onClick={() => setShowAutomation(false)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              <AutomationPanel 
+                projectId={projectId} 
+                projectName={project?.name || ''} 
+              />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

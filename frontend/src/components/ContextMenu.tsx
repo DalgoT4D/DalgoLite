@@ -66,7 +66,7 @@ export default function ContextMenu({
   return (
     <div
       ref={menuRef}
-      className="fixed bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-50 min-w-64"
+      className="context-menu fixed bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-50 min-w-64"
       style={{
         left: x,
         top: y,

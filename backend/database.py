@@ -489,7 +489,16 @@ class JoinRepository:
     
     def create_join(self, project_id: int, name: str, left_table_id: int, right_table_id: int,
                    left_table_type: str, right_table_type: str, join_type: str, 
-                   join_keys: List[Dict[str, str]], canvas_position: Dict[str, int]) -> JoinOperation:
+                   join_keys: List[Dict[str, str]], canvas_position: Dict[str, int], 
+                   output_table_name: Optional[str] = None) -> JoinOperation:
+        # Generate table name if not provided
+        if not output_table_name or not output_table_name.strip():
+            output_table_name = f"join_{project_id}_{int(datetime.now().timestamp())}"
+        else:
+            # Clean up the provided name
+            import re
+            output_table_name = re.sub(r'[^\w]', '_', output_table_name.lower())
+        
         join_op = JoinOperation(
             project_id=project_id,
             name=name,
@@ -500,7 +509,7 @@ class JoinRepository:
             join_type=join_type,
             join_keys=join_keys,
             canvas_position=canvas_position,
-            output_table_name=f"join_{project_id}_{int(datetime.now().timestamp())}"
+            output_table_name=output_table_name
         )
         self.db.add(join_op)
         self.db.commit()
@@ -527,6 +536,25 @@ class JoinRepository:
             join_op.updated_at = datetime.now(timezone.utc)
             self.db.commit()
             self.db.refresh(join_op)
+            return join_op
+        return None
+    
+    def update_join(self, join_id: int, name: str, output_table_name: Optional[str],
+                   left_table_id: int, right_table_id: int, left_table_type: str,
+                   right_table_type: str, join_type: str, join_keys: List[Dict[str, str]]) -> Optional[JoinOperation]:
+        join_op = self.get_join_by_id(join_id)
+        if join_op:
+            join_op.name = name
+            join_op.output_table_name = output_table_name
+            join_op.left_table_id = left_table_id
+            join_op.right_table_id = right_table_id
+            join_op.left_table_type = left_table_type
+            join_op.right_table_type = right_table_type
+            join_op.join_type = join_type
+            join_op.join_keys = join_keys
+            join_op.updated_at = datetime.utcnow()
+            
+            self.db.commit()
             return join_op
         return None
     

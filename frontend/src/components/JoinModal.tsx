@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useRef } from 'react'
-import { X, Database, Link } from 'lucide-react'
+import { X, Database, Link, AlertTriangle, Loader2 } from 'lucide-react'
 
 interface Table {
   id: number
@@ -14,6 +14,7 @@ interface JoinModalProps {
   onClose: () => void
   onCreateJoin: (joinConfig: {
     name: string
+    outputTableName?: string
     leftTable: number
     rightTable: number
     joinType: 'inner' | 'left' | 'right' | 'full'
@@ -21,6 +22,19 @@ interface JoinModalProps {
   }) => void
   position: { x: number; y: number }
   availableTables: Table[]
+  initialJoin?: {
+    id: number
+    name: string
+    outputTableName?: string
+    leftTable: string
+    rightTable: string
+    leftTableId: number
+    rightTableId: number
+    leftTableType: string
+    rightTableType: string
+    joinType: 'inner' | 'left' | 'right' | 'full'
+    joinKeys: { left: string; right: string }[]
+  }
 }
 
 export default function JoinModal({ 
@@ -28,9 +42,11 @@ export default function JoinModal({
   onClose, 
   onCreateJoin, 
   position, 
-  availableTables 
+  availableTables,
+  initialJoin 
 }: JoinModalProps) {
   const [joinName, setJoinName] = useState('')
+  const [outputTableName, setOutputTableName] = useState('')
   const [leftTable, setLeftTable] = useState<number | null>(null)
   const [rightTable, setRightTable] = useState<number | null>(null)
   const [joinType, setJoinType] = useState<'inner' | 'left' | 'right' | 'full'>('inner')
@@ -44,24 +60,82 @@ export default function JoinModal({
   const [modalPosition, setModalPosition] = useState({ x: 0, y: 0 })
   const modalRef = useRef<HTMLDivElement>(null)
 
+  // Warning dialog state
+  const [showWarning, setShowWarning] = useState(false)
+  const [warningMessage, setWarningMessage] = useState('')
+  const [pendingSubmit, setPendingSubmit] = useState(false)
+  
+  // Loading states
+  const [isValidating, setIsValidating] = useState(false)
+  const [isCreating, setIsCreating] = useState(false)
+
   const leftTableData = availableTables.find(t => t.id === leftTable)
   const rightTableData = availableTables.find(t => t.id === rightTable)
 
+  // Initialize form fields when editing
   useEffect(() => {
-    if (isOpen) {
-      // Reset form when modal opens
+    if (initialJoin) {
+      setJoinName(initialJoin.name)
+      setOutputTableName(initialJoin.outputTableName || '')
+      setJoinType(initialJoin.joinType)
+      setJoinKeys(initialJoin.joinKeys)
+      
+      // Convert backend table IDs to frontend availableTables IDs (with offsets)
+      let leftTableId: number | null = null
+      let rightTableId: number | null = null
+      
+      if (initialJoin.leftTableType === 'sheet') {
+        leftTableId = initialJoin.leftTableId
+      } else if (initialJoin.leftTableType === 'transformation') {
+        leftTableId = initialJoin.leftTableId + 10000 // Offset for transformation tables
+      }
+      
+      if (initialJoin.rightTableType === 'sheet') {
+        rightTableId = initialJoin.rightTableId
+      } else if (initialJoin.rightTableType === 'transformation') {
+        rightTableId = initialJoin.rightTableId + 10000 // Offset for transformation tables
+      }
+      
+      if (leftTableId) setLeftTable(leftTableId)
+      if (rightTableId) setRightTable(rightTableId)
+    } else {
+      // Reset form for new join
       setJoinName('')
+      setOutputTableName('')
       setLeftTable(null)
       setRightTable(null)
       setJoinType('inner')
       setJoinKeys([{ left: '', right: '' }])
+    }
+  }, [initialJoin, availableTables])
+
+  useEffect(() => {
+    if (isOpen) {
+      // Only reset form when modal opens for NEW join (not editing)
+      if (!initialJoin) {
+        setJoinName('')
+        setOutputTableName('')
+        setLeftTable(null)
+        setRightTable(null)
+        setJoinType('inner')
+        setJoinKeys([{ left: '', right: '' }])
+      }
+      
+      // Reset warning states
+      setShowWarning(false)
+      setPendingSubmit(false)
+      setWarningMessage('')
+      
+      // Reset loading states
+      setIsValidating(false)
+      setIsCreating(false)
       
       // Center the modal on screen
       const centerX = window.innerWidth / 2 - 300 // 300 is half of modal width (600px)
       const centerY = window.innerHeight / 2 - 200 // 200 is approximate half of modal height
       setModalPosition({ x: Math.max(20, centerX), y: Math.max(20, centerY) })
     }
-  }, [isOpen])
+  }, [isOpen, initialJoin])
 
   // Drag functionality
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -114,8 +188,135 @@ export default function JoinModal({
     setJoinKeys(updated)
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const validateJoinColumns = async (joinConfig: {
+    leftTable: number
+    rightTable: number
+    joinKeys: { left: string; right: string }[]
+  }) => {
+    try {
+      // Try to fetch actual data from the backend to check for common values
+      const response = await fetch(`http://localhost:8000/validate-join`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          leftTableId: joinConfig.leftTable,
+          rightTableId: joinConfig.rightTable,
+          joinKeys: joinConfig.joinKeys
+        })
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+        return result
+      } else {
+        // If API doesn't exist, get actual table data and check ourselves
+        return await checkActualDataValues(joinConfig)
+      }
+    } catch (error) {
+      console.log('API not available, checking actual data values:', error)
+      return await checkActualDataValues(joinConfig)
+    }
+  }
+
+  const checkActualDataValues = async (joinConfig: {
+    leftTable: number
+    rightTable: number
+    joinKeys: { left: string; right: string }[]
+  }) => {
+    try {
+      console.log('Fetching actual data for validation:', joinConfig)
+      
+      // Fetch data from both tables
+      const [leftResponse, rightResponse] = await Promise.all([
+        fetch(`http://localhost:8000/sheets/${joinConfig.leftTable}/data`),
+        fetch(`http://localhost:8000/sheets/${joinConfig.rightTable}/data`)
+      ])
+
+      if (!leftResponse.ok || !rightResponse.ok) {
+        console.log('Could not fetch data from one or both tables')
+        return { hasCommonValues: true, issues: [] } // Default to allowing join if we can't check
+      }
+
+      const leftData = await leftResponse.json()
+      const rightData = await rightResponse.json()
+
+      const issues: string[] = []
+      let hasCommonValues = true
+
+      // Check each join key for common values
+      for (const joinKey of joinConfig.joinKeys) {
+        const leftColumnData = leftData.data || []
+        const rightColumnData = rightData.data || []
+
+        // Find column indices
+        const leftColumns = leftData.columns || []
+        const rightColumns = rightData.columns || []
+        
+        const leftColIndex = leftColumns.indexOf(joinKey.left)
+        const rightColIndex = rightColumns.indexOf(joinKey.right)
+
+        if (leftColIndex === -1) {
+          issues.push(`Column '${joinKey.left}' not found in left table`)
+          hasCommonValues = false
+          continue
+        }
+
+        if (rightColIndex === -1) {
+          issues.push(`Column '${joinKey.right}' not found in right table`)
+          hasCommonValues = false
+          continue
+        }
+
+        // Extract values from both columns
+        const leftValues = new Set(
+          leftColumnData
+            .map(row => row[leftColIndex])
+            .filter(val => val !== null && val !== undefined && val !== '')
+            .map(val => String(val).trim().toLowerCase())
+        )
+
+        const rightValues = new Set(
+          rightColumnData
+            .map(row => row[rightColIndex])
+            .filter(val => val !== null && val !== undefined && val !== '')
+            .map(val => String(val).trim().toLowerCase())
+        )
+
+        // Check for common values
+        const commonValues = [...leftValues].filter(val => rightValues.has(val))
+        
+        console.log(`Checking join: ${joinKey.left} (${leftValues.size} unique values) vs ${joinKey.right} (${rightValues.size} unique values)`)
+        console.log(`Common values found: ${commonValues.length}`, commonValues.slice(0, 5))
+
+        if (commonValues.length === 0) {
+          issues.push(`No matching values found between '${joinKey.left}' and '${joinKey.right}'. This join may return empty results.`)
+          hasCommonValues = false
+        } else if (commonValues.length < Math.min(leftValues.size, rightValues.size) * 0.1) {
+          // Less than 10% overlap might be suspicious
+          issues.push(`Very few matching values found between '${joinKey.left}' and '${joinKey.right}' (${commonValues.length} matches). Please verify this is the correct join condition.`)
+          hasCommonValues = false
+        }
+      }
+
+      console.log('Data validation result:', { hasCommonValues, issues })
+      return { hasCommonValues, issues }
+      
+    } catch (error) {
+      console.log('Error checking actual data values:', error)
+      // If we can't check, allow the join (don't block legitimate joins due to technical issues)
+      return { hasCommonValues: true, issues: [] }
+    }
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    
+    // Prevent multiple submissions
+    if (isValidating || isCreating) {
+      return
+    }
     
     if (!joinName || !leftTable || !rightTable) {
       alert('Please fill in all required fields')
@@ -133,15 +334,79 @@ export default function JoinModal({
       return
     }
 
-    onCreateJoin({
+    const joinConfig = {
       name: joinName,
+      outputTableName: outputTableName.trim() || undefined,
       leftTable,
       rightTable,
       joinType,
       joinKeys: validJoinKeys
-    })
+    }
 
-    onClose()
+    // If this is a forced submit (user clicked "Create Anyway"), skip validation
+    if (pendingSubmit) {
+      console.log('Skipping validation - forced submit')
+      setIsCreating(true)
+      try {
+        await onCreateJoin(joinConfig)
+        onClose()
+      } finally {
+        setIsCreating(false)
+      }
+      return
+    }
+
+    // Validate join columns for common values
+    console.log('Starting join validation for:', { leftTable, rightTable, joinKeys: validJoinKeys })
+    setIsValidating(true)
+    try {
+      const validation = await validateJoinColumns({
+        leftTable,
+        rightTable,
+        joinKeys: validJoinKeys
+      })
+
+      console.log('Validation completed:', validation)
+
+      if (!validation.hasCommonValues && validation.issues.length > 0) {
+        // Show warning dialog
+        console.log('Showing warning dialog with issues:', validation.issues)
+        setWarningMessage(validation.issues.join('. '))
+        setShowWarning(true)
+        return
+      } else {
+        console.log('No validation issues found, proceeding with join creation')
+      }
+    } catch (error) {
+      console.log('Validation error, proceeding anyway:', error)
+    } finally {
+      setIsValidating(false)
+    }
+
+    // If validation passes or fails silently, create the join
+    setIsCreating(true)
+    try {
+      await onCreateJoin(joinConfig)
+      onClose()
+    } finally {
+      setIsCreating(false)
+    }
+  }
+
+  const handleCreateAnyway = () => {
+    setPendingSubmit(true)
+    setShowWarning(false)
+    // Trigger submit again but skip validation
+    const form = document.querySelector('form')
+    if (form) {
+      form.requestSubmit()
+    }
+  }
+
+  const handleCancelWarning = () => {
+    setShowWarning(false)
+    setPendingSubmit(false)
+    setWarningMessage('')
   }
 
   if (!isOpen) return null
@@ -167,7 +432,9 @@ export default function JoinModal({
             <div className="bg-purple-100 rounded-full p-2">
               <Link className="text-purple-600" size={20} />
             </div>
-            <h2 className="text-xl font-semibold text-gray-900">Create Join</h2>
+            <h2 className="text-xl font-semibold text-gray-900">
+              {initialJoin ? 'Edit Join' : 'Create Join'}
+            </h2>
           </div>
           <button
             onClick={onClose}
@@ -192,6 +459,23 @@ export default function JoinModal({
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
               required
             />
+          </div>
+
+          {/* Output Table Name */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Output Table Name
+            </label>
+            <input
+              type="text"
+              value={outputTableName}
+              onChange={(e) => setOutputTableName(e.target.value)}
+              placeholder="e.g., joined_sales_customers (optional)"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              If not specified, a table name will be auto-generated
+            </p>
           </div>
 
           {/* Table Selection */}
@@ -333,13 +617,61 @@ export default function JoinModal({
             </button>
             <button
               type="submit"
-              className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-lg transition-colors"
+              disabled={isValidating || isCreating}
+              className="px-6 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center gap-2"
             >
-              Create Join
+              {(isValidating || isCreating) && <Loader2 size={16} className="animate-spin" />}
+              {isValidating ? 'Validating...' : isCreating ? 'Creating...' : (initialJoin ? 'Save Changes' : 'Create Join')}
             </button>
           </div>
         </form>
       </div>
+
+      {/* Warning Dialog Overlay */}
+      {showWarning && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="bg-yellow-100 p-2 rounded-full">
+                  <AlertTriangle className="text-yellow-600" size={24} />
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900">Join Validation Warning</h3>
+              </div>
+              
+              <div className="mb-6">
+                <p className="text-gray-700 mb-3">
+                  We detected potential issues with your join configuration:
+                </p>
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                  <p className="text-sm text-yellow-800">{warningMessage}</p>
+                </div>
+                <p className="text-sm text-gray-600 mt-3">
+                  This might result in an empty result set or unexpected join behavior. 
+                  Do you want to create the join anyway?
+                </p>
+              </div>
+              
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  onClick={handleCancelWarning}
+                  className="px-4 py-2 text-gray-600 hover:text-gray-700 font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateAnyway}
+                  disabled={isCreating}
+                  className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center gap-2"
+                >
+                  {isCreating && <Loader2 size={16} className="animate-spin" />}
+                  {isCreating ? 'Creating...' : 'Create Anyway'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

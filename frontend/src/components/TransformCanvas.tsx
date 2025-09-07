@@ -16,7 +16,7 @@ import ReactFlow, {
   EdgeTypes,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
-import { Plus, Play, Save, Zap, X } from 'lucide-react'
+import { Plus, Play, Save, Zap, X, ChevronDown, Loader2 } from 'lucide-react'
 
 import SheetNode from './SheetNode'
 import TransformationNode from './TransformationNode'
@@ -47,12 +47,14 @@ interface TransformCanvasProps {
     generated_code?: string
     code_summary: string
     code_explanation?: string
+    output_table_name?: string
     status: string
     error_message?: string
     execution_time_ms?: number
     output_columns?: string[]
     canvas_position: { x: number; y: number }
   }>
+  joins: Array<any>
   onCreateTransformationStep: (stepData: {
     step_name: string
     user_prompt: string
@@ -71,6 +73,7 @@ export default function TransformCanvas({
   projectId,
   sheets,
   transformationSteps,
+  joins,
   onCreateTransformationStep,
   onUpdateTransformationStep,
   onExecuteStep,
@@ -101,6 +104,7 @@ export default function TransformCanvas({
   const [newOutputTableName, setNewOutputTableName] = useState('')
   const [selectedUpstreamNodes, setSelectedUpstreamNodes] = useState<string[]>([])
   const [isExecutingAll, setIsExecutingAll] = useState(false)
+  const [isCreatingStep, setIsCreatingStep] = useState(false)
   
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
@@ -123,6 +127,9 @@ export default function TransformCanvas({
     transformationStep?: string
   } | null>(null)
   
+  // Dropdown state
+  const [showCreateDropdown, setShowCreateDropdown] = useState(false)
+  
   // Auto-save state
   const [lastAutoSave, setLastAutoSave] = useState<Date>(new Date())
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
@@ -139,6 +146,9 @@ export default function TransformCanvas({
         id: node.id,
         type: node.type,
         position: node.position,
+        width: node.width,
+        height: node.height,
+        style: node.style,
         data: {
           // Only save essential data, not functions
           ...(node.type === 'sheetNode' ? { sheet: node.data.sheet } : {}),
@@ -285,19 +295,216 @@ export default function TransformCanvas({
         const savedNode = savedLayout?.nodes?.find((n: any) => n.id === `step-${step.id}`)
         const position = savedNode?.position || step.canvas_position || { x: 400, y: 200 }
         
-        initialNodes.push({
+        const nodeConfig: any = {
           id: `step-${step.id}`,
           type: 'transformationNode',
           position,
-        data: {
-          step,
-          onUpdate: (stepId: number, updates: any) => onUpdateTransformationStep(stepId, updates),
-          onExecute: (stepId: number) => onExecuteStep(stepId),
-          onViewData: handleViewTransformationData,
-          onDelete: onDeleteTransformationStep ? handleDeleteTransformationStep : undefined
-        },
+          data: {
+            step,
+            onUpdate: (stepId: number, updates: any) => onUpdateTransformationStep(stepId, updates),
+            onExecute: (stepId: number) => onExecuteStep(stepId),
+            onViewData: handleViewTransformationData,
+            onDelete: onDeleteTransformationStep ? handleDeleteTransformationStep : undefined
+          }
+        }
+        
+        // Restore saved dimensions if available
+        if (savedNode?.width) nodeConfig.width = savedNode.width
+        if (savedNode?.height) nodeConfig.height = savedNode.height
+        if (savedNode?.style) nodeConfig.style = savedNode.style
+        
+        initialNodes.push(nodeConfig)
       })
-    })
+
+      // Add join nodes
+      try {
+        const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
+        if (joinsResponse.ok) {
+          const joinsData = await joinsResponse.json()
+          console.log('DEBUG: Loaded joins:', joinsData.joins)
+          
+          joinsData.joins.forEach((join: any) => {
+            const savedNode = savedLayout?.nodes?.find((n: any) => n.id === `join-${join.id}`)
+            const position = savedNode?.position || join.canvas_position || { x: 300, y: 350 }
+            
+            // Resolve table names from IDs
+            const leftTableName = join.left_table_type === 'sheet' 
+              ? sheets.find(s => s.id === join.left_table_id)?.title || 'Unknown'
+              : transformationSteps.find(t => t.id === join.left_table_id)?.step_name || 'Unknown'
+            
+            const rightTableName = join.right_table_type === 'sheet' 
+              ? sheets.find(s => s.id === join.right_table_id)?.title || 'Unknown'
+              : transformationSteps.find(t => t.id === join.right_table_id)?.step_name || 'Unknown'
+            
+            initialNodes.push({
+              id: `join-${join.id}`,
+              type: 'joinNode',
+              position,
+              data: {
+                join: {
+                  id: join.id,
+                  name: join.name,
+                  leftTable: leftTableName,
+                  rightTable: rightTableName,
+                  leftTableId: join.left_table_id,
+                  rightTableId: join.right_table_id,
+                  leftTableType: join.left_table_type,
+                  rightTableType: join.right_table_type,
+                  joinType: join.join_type,
+                  joinKeys: join.join_keys,
+                  status: join.status || 'pending',
+                  outputTableName: join.output_table_name
+                },
+                onViewData: (joinId: number, joinName: string) => {
+                  setDataViewerSource({
+                    id: `join-${joinId}`,
+                    type: 'join',
+                    name: `${joinName} Output`
+                  })
+                  setDataViewerOpen(true)
+                },
+                onEdit: (joinId: number) => {
+                  console.log('Edit join:', joinId)
+                },
+                onUpdateJoin: async (joinId: number, joinConfig: any) => {
+                  try {
+                    const response = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}`, {
+                      method: 'PUT',
+                      headers: {
+                        'Content-Type': 'application/json',
+                      },
+                      body: JSON.stringify(joinConfig),
+                    })
+                    
+                    if (response.ok) {
+                      // Refresh the join nodes by refetching project data
+                      const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
+                      if (joinsResponse.ok) {
+                        const joinsData = await joinsResponse.json()
+                        console.log('Refreshed joins after update:', joinsData.joins)
+                        // The useEffect will handle updating the nodes
+                      }
+                    } else {
+                      const error = await response.json()
+                      alert(`Failed to update join: ${error.detail}`)
+                    }
+                  } catch (error) {
+                    console.error('Error updating join:', error)
+                    alert('Failed to update join. Please try again.')
+                  }
+                },
+                availableTables,
+                onDelete: async (joinId: number) => {
+                  if (window.confirm('Are you sure you want to delete this join? This action cannot be undone.')) {
+                    try {
+                      const deleteResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}`, {
+                        method: 'DELETE',
+                      })
+                      
+                      if (deleteResponse.ok) {
+                        setNodes(nodes => nodes.filter(node => node.id !== `join-${joinId}`))
+                        setHasUnsavedChanges(true)
+                      } else {
+                        alert('Failed to delete join. Please try again.')
+                      }
+                    } catch (error) {
+                      console.error('Error deleting join:', error)
+                      alert('Failed to delete join. Please try again.')
+                    }
+                  }
+                },
+                onExecute: async (joinId: number) => {
+                  try {
+                    setNodes(nodes => nodes.map(node => {
+                      if (node.id === `join-${joinId}`) {
+                        return {
+                          ...node,
+                          data: {
+                            ...node.data,
+                            join: {
+                              ...node.data.join,
+                              status: 'running'
+                            }
+                          }
+                        }
+                      }
+                      return node
+                    }))
+
+                    const executeResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}/execute`, {
+                      method: 'POST',
+                    })
+                    
+                    if (executeResponse.ok) {
+                      const result = await executeResponse.json()
+                      
+                      setNodes(nodes => nodes.map(node => {
+                        if (node.id === `join-${joinId}`) {
+                          return {
+                            ...node,
+                            data: {
+                              ...node.data,
+                              join: {
+                                ...node.data.join,
+                                status: 'completed'
+                              }
+                            }
+                          }
+                        }
+                        return node
+                      }))
+                      
+                      alert(`Join executed successfully! ${result.row_count} rows created in ${result.execution_time_ms}ms`)
+                    } else {
+                      const error = await executeResponse.json()
+                      
+                      setNodes(nodes => nodes.map(node => {
+                        if (node.id === `join-${joinId}`) {
+                          return {
+                            ...node,
+                            data: {
+                              ...node.data,
+                              join: {
+                                ...node.data.join,
+                                status: 'failed'
+                              }
+                            }
+                          }
+                        }
+                        return node
+                      }))
+                      
+                      alert(`Failed to execute join: ${error.detail}`)
+                    }
+                  } catch (error) {
+                    console.error('Error executing join:', error)
+                    
+                    setNodes(nodes => nodes.map(node => {
+                      if (node.id === `join-${joinId}`) {
+                        return {
+                          ...node,
+                          data: {
+                            ...node.data,
+                            join: {
+                              ...node.data.join,
+                              status: 'failed'
+                            }
+                          }
+                        }
+                      }
+                      return node
+                    }))
+                    
+                    alert('Failed to execute join. Please try again.')
+                  }
+                }
+              }
+            })
+          })
+        }
+      } catch (error) {
+        console.error('Error loading joins:', error)
+      }
 
     // Only update nodes if there's a meaningful difference, but preserve positions
     setNodes(prevNodes => {
@@ -319,14 +526,18 @@ export default function TransformCanvas({
         })
       
       if (hasChanges) {
-        // Preserve existing positions when updating
+        // Preserve existing positions, dimensions, and other properties when updating
         return initialNodes.map(newNode => {
           const existingNode = prevNodes.find(n => n.id === newNode.id)
           if (existingNode) {
-            // Preserve the current position unless it's a brand new node
+            // Preserve the current position, dimensions, and style unless it's a brand new node
             return {
               ...newNode,
-              position: existingNode.position
+              position: existingNode.position,
+              width: existingNode.width,
+              height: existingNode.height,
+              style: existingNode.style,
+              measured: existingNode.measured
             }
           }
           return newNode
@@ -353,21 +564,15 @@ export default function TransformCanvas({
   )
 
   const onPaneClick = useCallback((event: React.MouseEvent) => {
-    // Only show modal if clicking on empty space
-    const target = event.target as HTMLElement
-    if (target.classList.contains('react-flow__pane')) {
-      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-      setCreateModalPosition({
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top
-      })
-      setShowCreateModal(true)
-    }
+    // Close dropdown and context menu when clicking on canvas
+    setShowCreateDropdown(false)
+    setContextMenu(null)
   }, [])
 
   const handleCreateStep = async () => {
-    if (!newStepName.trim() || !newStepPrompt.trim()) return
+    if (!newStepName.trim() || !newStepPrompt.trim() || isCreatingStep) return
 
+    setIsCreatingStep(true)
     try {
       // Parse selected upstream nodes into sheet IDs and step IDs
       const upstream_sheet_ids: number[] = []
@@ -378,6 +583,10 @@ export default function TransformCanvas({
           upstream_sheet_ids.push(parseInt(nodeId.replace('sheet-', '')))
         } else if (nodeId.startsWith('step-')) {
           upstream_step_ids.push(parseInt(nodeId.replace('step-', '')))
+        } else if (nodeId.startsWith('join-')) {
+          // For joins, we might need to handle them differently in the backend
+          // For now, we'll treat them similar to transformation steps
+          upstream_step_ids.push(parseInt(nodeId.replace('join-', '')))
         }
       })
 
@@ -398,6 +607,8 @@ export default function TransformCanvas({
       setSelectedUpstreamNodes([])
     } catch (error) {
       console.error('Failed to create transformation step:', error)
+    } finally {
+      setIsCreatingStep(false)
     }
   }
 
@@ -471,6 +682,17 @@ export default function TransformCanvas({
     [onUpdateTransformationStep, saveCanvasLayout]
   )
 
+  const onNodeResizeStop = useCallback(
+    (event: React.MouseEvent, node: Node) => {
+      // Save layout immediately after resize
+      setHasUnsavedChanges(true)
+      setTimeout(() => {
+        saveCanvasLayout()
+      }, 100)
+    },
+    [saveCanvasLayout]
+  )
+
   // Context menu handlers
   const handlePaneContextMenu = useCallback((event: React.MouseEvent) => {
     event.preventDefault()
@@ -527,6 +749,27 @@ export default function TransformCanvas({
     }
   }, [isTransformModalDragging, transformModalDragOffset])
 
+  // Close dropdown and context menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showCreateDropdown) {
+        const dropdown = document.querySelector('.create-dropdown')
+        if (dropdown && !dropdown.contains(event.target as Node)) {
+          setShowCreateDropdown(false)
+        }
+      }
+      if (contextMenu) {
+        const contextMenuElement = document.querySelector('.context-menu')
+        if (contextMenuElement && !contextMenuElement.contains(event.target as Node)) {
+          setContextMenu(null)
+        }
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showCreateDropdown, contextMenu])
+
   const handleCreateJoin = useCallback(() => {
     if (contextMenu) {
       // Convert screen coordinates to canvas coordinates
@@ -542,7 +785,7 @@ export default function TransformCanvas({
     }
   }, [contextMenu])
 
-  // Available tables for join (sheets + completed transformations)
+  // Available tables for join (sheets + completed transformations + completed joins)
   const availableTables = useMemo(() => {
     const tables = [
       // Add sheets as available tables
@@ -558,13 +801,22 @@ export default function TransformCanvas({
           id: step.id + 10000, // Offset to avoid conflicts with sheet IDs
           name: step.step_name,
           columns: step.output_columns || []
+        })),
+      // Add completed joins as available tables
+      ...joins
+        .filter(join => join.status === 'completed')
+        .map(join => ({
+          id: join.id + 20000, // Offset to avoid conflicts with sheet and transformation IDs
+          name: join.output_table_name || join.name,
+          columns: [] // Join columns would need to be fetched from backend if needed
         }))
     ]
     return tables
-  }, [sheets, transformationSteps])
+  }, [sheets, transformationSteps, joins])
 
   const handleCreateJoinSubmit = useCallback(async (joinConfig: {
     name: string
+    outputTableName?: string
     leftTable: number
     rightTable: number
     joinType: 'inner' | 'left' | 'right' | 'full'
@@ -596,6 +848,7 @@ export default function TransformCanvas({
         body: JSON.stringify({
           project_id: projectId,
           name: joinConfig.name,
+          output_table_name: joinConfig.outputTableName,
           left_table_id: leftTableId,
           right_table_id: rightTableId,
           left_table_type: leftTableType,
@@ -626,12 +879,13 @@ export default function TransformCanvas({
             rightTable: rightTableData.name,
             joinType: joinConfig.joinType,
             joinKeys: joinConfig.joinKeys,
-            status: 'pending' as const
+            status: 'pending' as const,
+            outputTableName: result.output_table_name || joinConfig.outputTableName
           },
           onViewData: (joinId: number, joinName: string) => {
             setDataViewerSource({
               id: `join-${joinId}`,
-              type: 'project',
+              type: 'join',
               name: `${joinName} Output`
             })
             setDataViewerOpen(true)
@@ -639,6 +893,34 @@ export default function TransformCanvas({
           onEdit: (joinId: number) => {
             console.log('Edit join:', joinId)
           },
+          onUpdateJoin: async (joinId: number, joinConfig: any) => {
+            try {
+              const response = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}`, {
+                method: 'PUT',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(joinConfig),
+              })
+              
+              if (response.ok) {
+                // Refresh the join nodes by refetching project data
+                const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
+                if (joinsResponse.ok) {
+                  const joinsData = await joinsResponse.json()
+                  console.log('Refreshed joins after update:', joinsData.joins)
+                  // The useEffect will handle updating the nodes
+                }
+              } else {
+                const error = await response.json()
+                alert(`Failed to update join: ${error.detail}`)
+              }
+            } catch (error) {
+              console.error('Error updating join:', error)
+              alert('Failed to update join. Please try again.')
+            }
+          },
+          availableTables,
           onDelete: async (joinId: number) => {
             if (window.confirm('Are you sure you want to delete this join? This action cannot be undone.')) {
               try {
@@ -767,6 +1049,7 @@ export default function TransformCanvas({
         onPaneClick={onPaneClick}
         onPaneContextMenu={handlePaneContextMenu}
         onNodeDragStop={onNodeDragStop}
+        onNodeResizeStop={onNodeResizeStop}
         nodeTypes={nodeTypes}
         className="bg-gray-50"
         minZoom={0.2}
@@ -793,21 +1076,76 @@ export default function TransformCanvas({
       <div className="absolute top-4 left-4 bg-white rounded-lg shadow-lg border p-3 flex items-center gap-2">
         <button
           onClick={handleExecuteAll}
-          disabled={isExecutingAll || transformationSteps.length === 0}
+          disabled={isExecutingAll || (transformationSteps.length === 0 && joins.length === 0)}
           className={`flex items-center gap-2 px-3 py-2 rounded-lg font-medium transition-colors ${
-            isExecutingAll || transformationSteps.length === 0
+            isExecutingAll || (transformationSteps.length === 0 && joins.length === 0)
               ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
               : 'bg-blue-600 hover:bg-blue-700 text-white'
           }`}
         >
-          <Play size={16} className={isExecutingAll ? 'animate-spin' : ''} />
+          {isExecutingAll ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
           {isExecutingAll ? 'Running All...' : 'Run All'}
-          {transformationSteps.length > 0 && !isExecutingAll && (
+          {(transformationSteps.length > 0 || joins.length > 0) && !isExecutingAll && (
             <span className="text-xs bg-white/20 px-1.5 py-0.5 rounded">
-              {transformationSteps.length}
+              {transformationSteps.length + joins.length}
             </span>
           )}
         </button>
+
+        {/* Create Transformation Dropdown */}
+        <div className="relative create-dropdown">
+          <button
+            onClick={() => setShowCreateDropdown(!showCreateDropdown)}
+            className="flex items-center gap-2 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors"
+          >
+            <Plus size={16} />
+            Create Transform
+            <ChevronDown size={16} />
+          </button>
+          
+          {showCreateDropdown && (
+            <div className="absolute top-full mt-2 left-0 bg-white rounded-lg shadow-lg border min-w-[200px] z-10">
+              <button
+                onClick={() => {
+                  setShowCreateDropdown(false)
+                  const centerX = window.innerWidth / 2 - 192
+                  const centerY = window.innerHeight / 2 - 200
+                  setTransformModalPosition({ x: Math.max(20, centerX), y: Math.max(20, centerY) })
+                  setShowCreateModal(true)
+                }}
+                className="w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center gap-3 border-b border-gray-100"
+              >
+                <Zap size={16} className="text-green-600" />
+                <div>
+                  <div className="font-medium text-gray-900">AI Transformation</div>
+                  <div className="text-xs text-gray-500">Transform data with natural language</div>
+                </div>
+              </button>
+              
+              <button
+                onClick={() => {
+                  setShowCreateDropdown(false)
+                  const canvasRect = document.querySelector('.react-flow')?.getBoundingClientRect()
+                  if (canvasRect) {
+                    const canvasX = window.innerWidth / 2 - canvasRect.left - 100
+                    const canvasY = window.innerHeight / 2 - canvasRect.top - 50
+                    setJoinModalPosition({ x: Math.max(0, canvasX), y: Math.max(0, canvasY) })
+                  } else {
+                    setJoinModalPosition({ x: 200, y: 200 })
+                  }
+                  setShowJoinModal(true)
+                }}
+                className="w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center gap-3"
+              >
+                <Plus size={16} className="text-blue-600" />
+                <div>
+                  <div className="font-medium text-gray-900">Join Tables</div>
+                  <div className="text-xs text-gray-500">Combine data from multiple sources</div>
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
       
       {/* Save Status Indicator */}
@@ -830,24 +1168,6 @@ export default function TransformCanvas({
         )}
       </div>
 
-      {/* Instructions */}
-      {nodes.length === sheets.length && transformationSteps.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="bg-white rounded-lg shadow-lg border p-6 max-w-md text-center">
-            <Zap className="mx-auto text-green-600 mb-3" size={48} />
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">
-              Create Your First Transform
-            </h3>
-            <p className="text-gray-600 mb-4">
-              Right-click on the canvas to create transformations or joins. 
-              Describe what you want to do in plain English!
-            </p>
-            <div className="text-xs text-gray-500">
-              Examples: "Remove empty rows", "Add a column that combines first and last name", "Filter for active users"
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Context Menu */}
       {contextMenu && (
@@ -881,7 +1201,10 @@ export default function TransformCanvas({
                 <h3 className="text-lg font-semibold text-gray-900">Create AI Transformation</h3>
               </div>
               <button
-                onClick={() => setShowCreateModal(false)}
+                onClick={() => {
+                  setShowCreateModal(false)
+                  setIsCreatingStep(false)
+                }}
                 className="text-gray-400 hover:text-gray-600 transition-colors"
                 onMouseDown={(e) => e.stopPropagation()}
               >
@@ -986,6 +1309,29 @@ export default function TransformCanvas({
                       </div>
                     </label>
                   ))}
+
+                  {/* Join Nodes */}
+                  {joins.filter(join => join.status === 'completed').map((join) => (
+                    <label key={`join-${join.id}`} className="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedUpstreamNodes.includes(`join-${join.id}`)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedUpstreamNodes(prev => [...prev, `join-${join.id}`])
+                          } else {
+                            setSelectedUpstreamNodes(prev => prev.filter(id => id !== `join-${join.id}`))
+                          }
+                        }}
+                        className="mr-3 h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+                      />
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 bg-purple-600 rounded"></div>
+                        <span className="font-medium text-gray-900">{join.output_table_name || join.name}</span>
+                        <span className="text-sm text-gray-500">(Join Output)</span>
+                      </div>
+                    </label>
+                  ))}
                 </div>
                 {selectedUpstreamNodes.length === 0 && (
                   <p className="text-sm text-red-600 mt-1">Please select at least one data source</p>
@@ -1011,6 +1357,7 @@ export default function TransformCanvas({
                   setNewStepPrompt('')
                   setNewOutputTableName('')
                   setSelectedUpstreamNodes([])
+                  setIsCreatingStep(false)
                 }}
                 className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium transition-colors"
               >
@@ -1018,10 +1365,11 @@ export default function TransformCanvas({
               </button>
               <button
                 onClick={handleCreateStep}
-                disabled={!newStepName.trim() || !newStepPrompt.trim() || selectedUpstreamNodes.length === 0}
-                className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white rounded-lg font-medium transition-colors"
+                disabled={!newStepName.trim() || !newStepPrompt.trim() || selectedUpstreamNodes.length === 0 || isCreatingStep}
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors flex items-center gap-2"
               >
-                Generate Transform
+                {isCreatingStep && <Loader2 size={16} className="animate-spin" />}
+                {isCreatingStep ? 'Generating...' : 'Generate Transform'}
               </button>
             </div>
           </div>
