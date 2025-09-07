@@ -66,7 +66,6 @@ def get_refreshed_credentials():
         
         # Check if token is expired and refresh if needed
         if creds.expired and creds.refresh_token:
-            print(f"DEBUG: Token expired, refreshing...")
             creds.refresh(GoogleRequest())
             # Update stored credentials with new token
             user_credentials['default'] = {
@@ -77,11 +76,9 @@ def get_refreshed_credentials():
                 'client_secret': creds.client_secret,
                 'scopes': creds.scopes
             }
-            print(f"DEBUG: Token refreshed successfully")
         
         return creds
     except Exception as e:
-        print(f"DEBUG: Failed to get/refresh credentials: {e}")
         return None
 
 # Pydantic models for API requests
@@ -208,7 +205,6 @@ async def google_auth():
 @app.get("/auth/callback/google")
 async def auth_callback(code: str, state: str = None):
     try:
-        print(f"DEBUG: OAuth callback received code: {code[:20]}... state: {state}")
         
         flow = Flow.from_client_config(
             {
@@ -224,11 +220,9 @@ async def auth_callback(code: str, state: str = None):
         )
         flow.redirect_uri = REDIRECT_URI
         
-        print(f"DEBUG: Fetching token with code...")
         flow.fetch_token(code=code)
         credentials = flow.credentials
         
-        print(f"DEBUG: Got credentials, storing...")
         
         # Store credentials (use proper session management in production)
         user_credentials['default'] = {
@@ -240,8 +234,6 @@ async def auth_callback(code: str, state: str = None):
             'scopes': credentials.scopes
         }
         
-        print(f"DEBUG: Credentials stored successfully. Keys: {list(user_credentials.keys())}")
-        print(f"DEBUG: Scopes: {credentials.scopes}")
         
         # Redirect back to frontend
         return RedirectResponse(url="http://localhost:3000?connected=true")
@@ -291,7 +283,6 @@ async def auth_status():
 async def clear_auth():
     """Clear stored credentials to force re-authentication"""
     user_credentials.clear()
-    print("DEBUG: Credentials cleared, user needs to re-authenticate")
     return {"message": "Credentials cleared successfully"}
 
 @app.get("/sheets/list")
@@ -312,13 +303,10 @@ async def list_sheets():
 @app.post("/sheets/analyze")
 async def analyze_sheet(sheet_data: Dict[str, Any], db: Session = Depends(get_db)):
     try:
-        print(f"DEBUG: Received sheet_data: {sheet_data}")
         
         spreadsheet_input = sheet_data.get('spreadsheet_id')
         range_name = sheet_data.get('range', 'Sheet1!A:Z')
         
-        print(f"DEBUG: spreadsheet_input: {spreadsheet_input}")
-        print(f"DEBUG: range_name: {range_name}")
         
         if not spreadsheet_input:
             raise HTTPException(status_code=400, detail="Spreadsheet ID or URL is required")
@@ -326,16 +314,12 @@ async def analyze_sheet(sheet_data: Dict[str, Any], db: Session = Depends(get_db
         # Extract spreadsheet ID from URL or validate existing ID
         try:
             spreadsheet_id = extract_spreadsheet_id(spreadsheet_input)
-            print(f"DEBUG: extracted spreadsheet_id: {spreadsheet_id}")
         except ValueError as e:
-            print(f"DEBUG: ValueError in extract_spreadsheet_id: {e}")
             raise HTTPException(status_code=400, detail=str(e))
         
         if 'default' not in user_credentials:
-            print("DEBUG: Not authenticated - no credentials found")
             raise HTTPException(status_code=401, detail="Not authenticated")
         
-        print(f"DEBUG: Found credentials, building service...")
         creds = get_refreshed_credentials()
         if creds is None:
             raise HTTPException(status_code=500, detail="Could not get valid credentials")
@@ -346,14 +330,12 @@ async def analyze_sheet(sheet_data: Dict[str, Any], db: Session = Depends(get_db
             spreadsheet_metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
             spreadsheet_title = spreadsheet_metadata.get('properties', {}).get('title', 'Untitled Sheet')
         except Exception as metadata_error:
-            print(f"DEBUG: Failed to get spreadsheet metadata: {metadata_error}")
             # Try to get basic info from Drive API as fallback
             try:
                 drive_service = build('drive', 'v3', credentials=creds)
                 file_info = drive_service.files().get(fileId=spreadsheet_id, fields='name,mimeType').execute()
                 spreadsheet_title = file_info.get('name', 'Unknown Sheet')
                 mime_type = file_info.get('mimeType', '')
-                print(f"DEBUG: Drive API file info - name: {spreadsheet_title}, mimeType: {mime_type}")
                 
                 if mime_type != 'application/vnd.google-apps.spreadsheet':
                     raise HTTPException(
@@ -361,14 +343,12 @@ async def analyze_sheet(sheet_data: Dict[str, Any], db: Session = Depends(get_db
                         detail=f"This file is not a Google Sheets document (found: {mime_type}). Please make sure you're connecting to a Google Sheets file, not an Excel or other file type."
                     )
             except Exception as drive_error:
-                print(f"DEBUG: Drive API also failed: {drive_error}")
                 raise HTTPException(
                     status_code=400, 
                     detail="Unable to access this document. Please ensure: 1) The link is for a Google Sheets file (not Excel), 2) The sheet is shared with appropriate permissions, 3) The sheet exists and is accessible."
                 )
         
         # Get sheet data - try different range formats
-        print(f"DEBUG: Calling Google Sheets API with ID: {spreadsheet_id}, range: {range_name}")
         sheet = service.spreadsheets()
         
         # Try multiple range formats in order of preference
@@ -385,7 +365,6 @@ async def analyze_sheet(sheet_data: Dict[str, Any], db: Session = Depends(get_db
         
         for attempt_range in range_attempts:
             try:
-                print(f"DEBUG: Trying range: '{attempt_range}'")
                 if attempt_range:
                     result = sheet.values().get(spreadsheetId=spreadsheet_id, range=attempt_range).execute()
                 else:
@@ -394,15 +373,12 @@ async def analyze_sheet(sheet_data: Dict[str, Any], db: Session = Depends(get_db
                     if sheets:
                         actual_sheet_name = sheets[0]['properties']['title']
                         actual_range = f"{actual_sheet_name}!A:Z"
-                        print(f"DEBUG: Found sheet name: '{actual_sheet_name}', trying range: '{actual_range}'")
                         result = sheet.values().get(spreadsheetId=spreadsheet_id, range=actual_range).execute()
                 
                 successful_range = attempt_range
-                print(f"DEBUG: SUCCESS with range: '{successful_range}'")
                 break
                 
             except Exception as range_error:
-                print(f"DEBUG: Range '{attempt_range}' failed: {range_error}")
                 continue
         
         if result is None:
@@ -438,9 +414,7 @@ async def analyze_sheet(sheet_data: Dict[str, Any], db: Session = Depends(get_db
             # Store the full sheet data in the warehouse
             try:
                 df.to_sql(warehouse_table_name, engine, if_exists='replace', index=False)
-                print(f"DEBUG: Stored full sheet data ({len(df)} rows) in warehouse table: {warehouse_table_name}")
             except Exception as warehouse_error:
-                print(f"DEBUG: Failed to store full sheet data in warehouse: {warehouse_error}")
                 # Continue anyway - this is not a critical error for the initial connection
         
         # Generate chart recommendations
@@ -456,9 +430,7 @@ async def analyze_sheet(sheet_data: Dict[str, Any], db: Session = Depends(get_db
         }
         
     except Exception as e:
-        print(f"DEBUG: Exception in analyze_sheet: {type(e).__name__}: {e}")
         import traceback
-        print(f"DEBUG: Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 def generate_chart_recommendations(values: List[List[str]]) -> List[Dict[str, Any]]:
@@ -765,13 +737,10 @@ async def resync_sheet_data(sheet_id: int, db: Session = Depends(get_db)):
             
             for attempt_range in range_attempts:
                 try:
-                    print(f"DEBUG: Trying range: '{attempt_range}'")
                     result = sheet.values().get(spreadsheetId=existing_sheet.spreadsheet_id, range=attempt_range).execute()
                     successful_range = attempt_range
-                    print(f"DEBUG: SUCCESS with range: '{successful_range}'")
                     break
                 except Exception as range_error:
-                    print(f"DEBUG: Range '{attempt_range}' failed: {range_error}")
                     continue
             
             if result is None:
@@ -1166,15 +1135,12 @@ def get_warehouse_sheet_data(sheet: ConnectedSheet) -> pd.DataFrame:
         import re
         warehouse_table_name = re.sub(r'[^\w]', '_', warehouse_table_name)
         
-        print(f"DEBUG: Reading sheet data from warehouse table: {warehouse_table_name}")
         
         # Read from warehouse
         df = pd.read_sql_table(warehouse_table_name, engine)
-        print(f"DEBUG: Successfully loaded {len(df)} rows from warehouse for sheet: {sheet.title}")
         return df
         
     except Exception as e:
-        print(f"DEBUG: Failed to read from warehouse for sheet {sheet.title}, falling back to Google Sheets: {e}")
         # Fallback to Google Sheets if warehouse data doesn't exist
         return fetch_full_sheet_data_from_google(sheet)
 
@@ -1183,15 +1149,12 @@ def fetch_full_sheet_data_from_google(sheet: ConnectedSheet) -> pd.DataFrame:
     try:
         # DEBUG: Check credential structure
         if 'default' not in user_credentials:
-            print(f"DEBUG: No credentials found, user needs to re-authenticate")
             return pd.DataFrame()
         
-        print(f"DEBUG: Credential keys: {list(user_credentials['default'].keys())}")
         
         # Use helper function to get credentials with automatic refresh
         creds = get_refreshed_credentials()
         if creds is None:
-            print(f"DEBUG: Could not get valid credentials")
             return pd.DataFrame()
         
         service = build('sheets', 'v4', credentials=creds)
@@ -1206,24 +1169,19 @@ def fetch_full_sheet_data_from_google(sheet: ConnectedSheet) -> pd.DataFrame:
         result = None
         for attempt_range in range_attempts:
             try:
-                print(f"DEBUG: Trying range: '{attempt_range}' for {sheet.title}")
                 result = service.spreadsheets().values().get(
                     spreadsheetId=sheet.spreadsheet_id, 
                     range=attempt_range
                 ).execute()
-                print(f"DEBUG: SUCCESS with range: '{attempt_range}' for {sheet.title}")
                 break
             except Exception as range_error:
-                print(f"DEBUG: Range '{attempt_range}' failed for {sheet.title}: {range_error}")
                 continue
         
         if result is None:
-            print(f"DEBUG: Could not fetch data for sheet {sheet.title}")
             return pd.DataFrame()
         
         values = result.get('values', [])
         if not values or len(values) < 2:
-            print(f"DEBUG: Insufficient data in sheet {sheet.title}")
             return pd.DataFrame()
         
         # Convert to DataFrame
@@ -1240,11 +1198,9 @@ def fetch_full_sheet_data_from_google(sheet: ConnectedSheet) -> pd.DataFrame:
             normalized_rows.append(normalized_row)
         
         df = pd.DataFrame(normalized_rows, columns=headers)
-        print(f"DEBUG: Successfully fetched {len(df)} rows from {sheet.title}")
         return df
         
     except Exception as e:
-        print(f"DEBUG: fetch_full_sheet_data_from_google FAILED for {sheet.title}: {e}")
         return pd.DataFrame()
 
 # Keep the old function name as an alias for backward compatibility, but it should now use warehouse data
@@ -1535,63 +1491,63 @@ async def execute_join(project_id: int, join_id: int, db: Session = Depends(get_
         if not join_op or join_op.project_id != project_id:
             raise HTTPException(status_code=404, detail="Join operation not found")
         
-        # Get data from both tables
-        left_df = None
-        right_df = None
-        
-        sheet_repo = SheetRepository(db)
-        
-        # Get left table data
-        if join_op.left_table_type == 'sheet':
-            left_sheet = sheet_repo.get_sheet_by_id(join_op.left_table_id)
-            if not left_sheet:
-                raise HTTPException(status_code=404, detail="Left sheet not found")
-            left_df = fetch_full_sheet_data(left_sheet)
-            if left_df is None or left_df.empty:
-                raise HTTPException(status_code=500, detail="Could not fetch data from left sheet. Please check your Google Sheets authentication.")
-        elif join_op.left_table_type == 'transformation':
-            # Get transformation output data
-            left_table_name = f"transform_step_{join_op.left_table_id}"
-            with engine.connect() as conn:
-                try:
-                    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"), 
-                                        {"pattern": f"%{left_table_name}%"})
-                    table_names = [row[0] for row in result.fetchall()]
-                    if table_names:
-                        left_df = pd.read_sql_table(table_names[0], conn)
-                    else:
-                        raise HTTPException(status_code=404, detail="Left transformation output table not found")
-                except Exception as e:
-                    raise HTTPException(status_code=500, detail=f"Error reading left transformation data: {str(e)}")
-        
-        # Get right table data
-        if join_op.right_table_type == 'sheet':
-            right_sheet = sheet_repo.get_sheet_by_id(join_op.right_table_id)
-            if not right_sheet:
-                raise HTTPException(status_code=404, detail="Right sheet not found")
-            right_df = fetch_full_sheet_data(right_sheet)
-            if right_df is None or right_df.empty:
-                raise HTTPException(status_code=500, detail="Could not fetch data from right sheet. Please check your Google Sheets authentication.")
-        elif join_op.right_table_type == 'transformation':
-            # Get transformation output data
-            right_table_name = f"transform_step_{join_op.right_table_id}"
-            with engine.connect() as conn:
-                try:
-                    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"), 
-                                        {"pattern": f"%{right_table_name}%"})
-                    table_names = [row[0] for row in result.fetchall()]
-                    if table_names:
-                        right_df = pd.read_sql_table(table_names[0], conn)
-                    else:
-                        raise HTTPException(status_code=404, detail="Right transformation output table not found")
-                except Exception as e:
-                    raise HTTPException(status_code=500, detail=f"Error reading right transformation data: {str(e)}")
-        
-        if left_df is None or right_df is None:
-            raise HTTPException(status_code=500, detail="Failed to load data for join")
-        
-        # Perform the join
+        # Get data from both tables and perform join - wrap everything in try-catch
         try:
+            left_df = None
+            right_df = None
+            
+            sheet_repo = SheetRepository(db)
+            
+            # Get left table data
+            if join_op.left_table_type == 'sheet':
+                left_sheet = sheet_repo.get_sheet_by_id(join_op.left_table_id)
+                if not left_sheet:
+                    raise Exception("Left sheet not found")
+                left_df = fetch_full_sheet_data(left_sheet)
+                if left_df is None or left_df.empty:
+                    raise Exception("Could not fetch data from left sheet. Please check your Google Sheets authentication.")
+            elif join_op.left_table_type == 'transformation':
+                # Get transformation output data
+                left_table_name = f"transform_step_{join_op.left_table_id}"
+                with engine.connect() as conn:
+                    try:
+                        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"), 
+                                            {"pattern": f"%{left_table_name}%"})
+                        table_names = [row[0] for row in result.fetchall()]
+                        if table_names:
+                            left_df = pd.read_sql_table(table_names[0], conn)
+                        else:
+                            raise Exception("Left transformation output table not found")
+                    except Exception as e:
+                        raise Exception(f"Error reading left transformation data: {str(e)}")
+            
+            # Get right table data
+            if join_op.right_table_type == 'sheet':
+                right_sheet = sheet_repo.get_sheet_by_id(join_op.right_table_id)
+                if not right_sheet:
+                    raise Exception("Right sheet not found")
+                right_df = fetch_full_sheet_data(right_sheet)
+                if right_df is None or right_df.empty:
+                    raise Exception("Could not fetch data from right sheet. Please check your Google Sheets authentication.")
+            elif join_op.right_table_type == 'transformation':
+                # Get transformation output data
+                right_table_name = f"transform_step_{join_op.right_table_id}"
+                with engine.connect() as conn:
+                    try:
+                        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"), 
+                                            {"pattern": f"%{right_table_name}%"})
+                        table_names = [row[0] for row in result.fetchall()]
+                        if table_names:
+                            right_df = pd.read_sql_table(table_names[0], conn)
+                        else:
+                            raise Exception("Right transformation output table not found")
+                    except Exception as e:
+                        raise Exception(f"Error reading right transformation data: {str(e)}")
+            
+            if left_df is None or right_df is None:
+                raise Exception("Failed to load data for join")
+            
+            # Perform the join
             join_keys = join_op.join_keys
             left_on = [key['left'] for key in join_keys]
             right_on = [key['right'] for key in join_keys]
@@ -1647,14 +1603,14 @@ async def execute_join(project_id: int, join_id: int, db: Session = Depends(get_
                 "execution_time_ms": execution_time
             }
             
-        except Exception as join_error:
-            # Update join operation with error
+        except Exception as execution_error:
+            # Update join operation with error (catches all errors including data fetch and join execution)
             join_repo.update_join_status(
                 join_id=join_id,
                 status='failed',
-                error_message=str(join_error)
+                error_message=str(execution_error)
             )
-            raise HTTPException(status_code=400, detail=f"Join execution failed: {str(join_error)}")
+            raise HTTPException(status_code=400, detail=f"Join execution failed: {str(execution_error)}")
         
     except HTTPException:
         raise
@@ -1979,13 +1935,49 @@ async def delete_project(project_id: int, db: Session = Depends(get_db)):
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        # Delete AI transformation steps first
+        # Delete AI transformation steps and their output tables
         ai_steps = db.query(AITransformationStep).filter(
             AITransformationStep.project_id == project_id
         ).all()
         for step in ai_steps:
+            # Delete output table if it exists
+            if step.output_table_name:
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text(f"DROP TABLE IF EXISTS {step.output_table_name}"))
+                        conn.commit()
+                except Exception as e:
+                    print(f"Warning: Failed to drop transformation table {step.output_table_name}: {e}")
+            else:
+                # Try to drop default table name pattern
+                try:
+                    step_name_clean = step.step_name.lower().replace(' ', '_').replace('-', '_')
+                    table_name = f"transform_step_{step.id}_{step_name_clean}"
+                    import re
+                    table_name = re.sub(r'[^\w]', '_', table_name)
+                    with engine.connect() as conn:
+                        conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+                        conn.commit()
+                except Exception as e:
+                    print(f"Warning: Failed to drop default transformation table for step {step.id}: {e}")
+            
             db.delete(step)
         
+        # Delete join operations and their output tables
+        join_repo = JoinRepository(db)
+        joins = join_repo.get_joins_by_project(project_id)
+        for join in joins:
+            # Delete output table if it exists
+            if join.output_table_name:
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text(f"DROP TABLE IF EXISTS {join.output_table_name}"))
+                        conn.commit()
+                except Exception as e:
+                    print(f"Warning: Failed to drop join table {join.output_table_name}: {e}")
+            
+            join_repo.delete_join(join.id)
+
         # Delete project charts (cascade handled by database relationship)
         chart_repo = ChartRepository(db)
         project_charts = db.query(SavedChart).filter(SavedChart.project_id == project_id).all()
@@ -2931,7 +2923,6 @@ async def create_ai_transformation_step(
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         
-        print(f"DEBUG: Creating step with output_table_name: '{request.output_table_name}'")
         transformation_step = AITransformationStep(
             project_id=project_id,
             step_name=request.step_name,
@@ -3045,7 +3036,6 @@ async def update_transformation_step(
             # TODO: Implement code regeneration
         if request.output_table_name is not None:
             step.output_table_name = request.output_table_name.strip() if request.output_table_name.strip() else None
-            print(f"DEBUG: Updated step {step_id} output_table_name to: {step.output_table_name}")
         if request.upstream_step_ids is not None:
             step.upstream_step_ids = request.upstream_step_ids
         if request.upstream_sheet_ids is not None:
@@ -3066,7 +3056,6 @@ async def update_transformation_step(
             "canvas_position": step.canvas_position,
             "updated_at": step.updated_at.isoformat()
         }
-        print(f"DEBUG: Update response for step {step.id}: {result}")
         return result
         
     except HTTPException:
@@ -3088,6 +3077,27 @@ async def delete_transformation_step(step_id: int, db: Session = Depends(get_db)
         
         if not step:
             raise HTTPException(status_code=404, detail="Transformation step not found")
+        
+        # Delete output table if it exists
+        if step.output_table_name:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f"DROP TABLE IF EXISTS {step.output_table_name}"))
+                    conn.commit()
+            except Exception as e:
+                print(f"Warning: Failed to drop transformation table {step.output_table_name}: {e}")
+        else:
+            # Try to drop default table name pattern
+            try:
+                step_name_clean = step.step_name.lower().replace(' ', '_').replace('-', '_')
+                table_name = f"transform_step_{step.id}_{step_name_clean}"
+                import re
+                table_name = re.sub(r'[^\w]', '_', table_name)
+                with engine.connect() as conn:
+                    conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+                    conn.commit()
+            except Exception as e:
+                print(f"Warning: Failed to drop default transformation table for step {step.id}: {e}")
         
         db.delete(step)
         db.commit()
@@ -3139,22 +3149,16 @@ async def execute_transformation_step(step_id: int, db: Session = Depends(get_db
                         
                         # Get full data from warehouse (much faster than Google Sheets API)
                         df = None
-                        print(f"DEBUG: Attempting to fetch data from warehouse for sheet {sheet.title}")
                         try:
                             # Use warehouse data instead of Google Sheets API calls
                             df = fetch_full_sheet_data(sheet)
                             if df is not None and not df.empty:
-                                print(f"DEBUG: SUCCESS - Loaded {len(df)} rows from sheet {sheet.title}")
                             else:
-                                print(f"DEBUG: No data returned from fetch_full_sheet_data for {sheet.title}")
                         except Exception as e:
-                            print(f"DEBUG: FAILED to load data from warehouse: {e}")
-                            print(f"DEBUG: Exception type: {type(e).__name__}")
                         
                         # Fallback to sample data only if Google Sheets fetch fails
                         if df is None or df.empty:
                             if sheet.sample_data and sheet.columns:
-                                print(f"DEBUG: Falling back to sample_data with {len(sheet.sample_data)} rows")
                             df_data = {}
                             for i, col in enumerate(sheet.columns):
                                 column_data = []
@@ -3284,9 +3288,7 @@ async def get_sheet_data(sheet_id: int, db: Session = Depends(get_db)):
         
         # Get full sheet data (not just sample)
         try:
-            print(f"DEBUG: Fetching full sheet data for sheet_id {sheet_id}, title: {sheet.title}")
             df = fetch_full_sheet_data(sheet)
-            print(f"DEBUG: Got DataFrame with {len(df)} rows and {len(df.columns) if not df.empty else 0} columns")
             
             # Convert DataFrame to the format expected by the frontend
             columns = df.columns.tolist()
@@ -3350,11 +3352,9 @@ async def get_transformation_data(step_id: int, db: Session = Depends(get_db)):
         table_name = None
         
         # First priority: use the custom output_table_name if it exists
-        print(f"DEBUG: step.output_table_name = '{step.output_table_name}' (type: {type(step.output_table_name)}, bool: {bool(step.output_table_name)})")
         if step.output_table_name and step.output_table_name.strip():
             import re
             table_name = re.sub(r'[^\w]', '_', step.output_table_name.lower())
-            print(f"DEBUG: Using custom output_table_name: {step.output_table_name} -> {table_name}")
         
         # Second priority: extract from code_explanation
         if not table_name and step.code_explanation:
@@ -3362,7 +3362,6 @@ async def get_transformation_data(step_id: int, db: Session = Depends(get_db)):
             for line in lines:
                 if line.startswith('Output table:'):
                     table_name = line.split(':', 2)[1].strip()
-                    print(f"DEBUG: Extracted table name from code_explanation: {table_name}")
                     break
         
         # Last resort: generate using default pattern 
@@ -3372,7 +3371,6 @@ async def get_transformation_data(step_id: int, db: Session = Depends(get_db)):
             # Apply the same regex cleaning as storage
             import re
             table_name = re.sub(r'[^\w]', '_', table_name)
-            print(f"DEBUG: Generated default table name: {table_name}")
         
         # Try to read the data from the SQLite database using the same engine as storage
         from database import engine
@@ -3383,12 +3381,10 @@ async def get_transformation_data(step_id: int, db: Session = Depends(get_db)):
             # Use the same database connection as the storage function
             conn = engine.connect()
             
-            print(f"DEBUG: Looking for table: {table_name} for step {step_id} (custom_name={getattr(step, 'output_table_name', None)})")
             
             # Check if table exists using pandas to query
             try:
                 df = pd.read_sql_query(f"SELECT * FROM `{table_name}`", conn)
-                print(f"DEBUG: Found table {table_name} with {len(df)} rows")
             except Exception:
                 # If the expected table name doesn't work, try to find any table with step_id
                 try:
@@ -3427,7 +3423,6 @@ async def get_transformation_data(step_id: int, db: Session = Depends(get_db)):
                 "total_rows": len(data_rows),
                 "table_name": table_name
             }
-            print(f"DEBUG: Returning {len(data_rows)} rows for table {table_name}")
             return result
             
         except Exception as e:
@@ -3616,8 +3611,6 @@ async def chat_with_data(request: ChatRequest, db: Session = Depends(get_db)):
                         analysis_prompt = f"Please analyze and explain the '{chart_info['name']}' chart based on the provided context. Focus on insights, patterns, and what the data shows."
                         analysis_response = await llm_service.chat_with_context(analysis_prompt, analysis_context)
                         
-                        print(f"DEBUG: analysis_response type: {analysis_response.get('type')}")
-                        print(f"DEBUG: analysis_response content: {analysis_response.get('content', '')[:200]}...")
                         
                         if analysis_response.get("type") == "text":
                             final_response += f"\n\n📊 **{chart_info['name']}** Analysis:\n\n{analysis_response.get('content', '')}"
@@ -3626,7 +3619,6 @@ async def chat_with_data(request: ChatRequest, db: Session = Depends(get_db)):
                     else:
                         final_response += f"\n\n❌ {result['error']}"
             
-            print(f"DEBUG: final_response before return: {final_response[:500]}...")
             return {
                 "response": final_response,
                 "context_provided": bool(context),
