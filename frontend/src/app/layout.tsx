@@ -1,6 +1,7 @@
 import './globals.css'
 import type { Metadata } from 'next'
 import { AuthProvider } from '@/contexts/AuthContext'
+import { SidebarProvider } from '@/contexts/SidebarContext'
 
 export const metadata: Metadata = {
   title: 'DalgoLite - Smart Data Analytics',
@@ -16,7 +17,9 @@ export default function RootLayout({
     <html lang="en">
       <body className="bg-gray-50">
         <AuthProvider>
-          {children}
+          <SidebarProvider>
+            {children}
+          </SidebarProvider>
         </AuthProvider>
       </body>
     </html>
