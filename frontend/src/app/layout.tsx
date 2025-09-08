@@ -1,6 +1,12 @@
 import './globals.css'
 import type { Metadata } from 'next'
 import { AuthProvider } from '@/contexts/AuthContext'
+import { Anek_Latin } from 'next/font/google'
+
+const anekLatin = Anek_Latin({
+  subsets: ['latin'],
+  display: 'swap',
+})
 
 export const metadata: Metadata = {
   title: 'DalgoLite - Smart Data Analytics',
@@ -14,7 +20,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-gray-50">
+      <body className={`bg-gray-50 ${anekLatin.className}`}>
         <AuthProvider>
           {children}
         </AuthProvider>
