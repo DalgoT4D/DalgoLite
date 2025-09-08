@@ -67,6 +67,7 @@ interface TransformCanvasProps {
   onExecuteStep: (stepId: number) => Promise<void>
   onExecuteAll?: () => Promise<void>
   onDeleteTransformationStep?: (stepId: number) => Promise<void>
+  onJoinCreated?: () => Promise<void>
 }
 
 export default function TransformCanvas({
@@ -79,6 +80,7 @@ export default function TransformCanvas({
   onExecuteStep,
   onExecuteAll,
   onDeleteTransformationStep,
+  onJoinCreated,
 }: TransformCanvasProps) {
   const [nodes, setNodes, onNodesChangeOriginal] = useNodesState([])
   const [edges, setEdges, onEdgesChangeOriginal] = useEdgesState([])
@@ -238,7 +240,6 @@ export default function TransformCanvas({
         if (response.ok) {
           const project = await response.json()
           if (project.canvas_layout) {
-            ('DEBUG: Found canvas_layout:', project.canvas_layout)
             savedLayout = project.canvas_layout
             // Load saved connections
             if (project.canvas_layout.connections) {
@@ -249,20 +250,16 @@ export default function TransformCanvas({
                 sourceHandle: conn.sourceHandle,
                 targetHandle: conn.targetHandle
               }))
-              ('DEBUG: Setting edges:', savedEdges)
               setEdges(savedEdges)
             }
           } else {
-            ('DEBUG: No canvas_layout found in project')
           }
         } else {
-          ('DEBUG: Failed to fetch project:', response.status)
         }
       } catch (error) {
         console.error('Error loading canvas layout:', error)
       }
       
-      ('DEBUG: savedLayout received in initializeCanvas:', savedLayout)
       const initialNodes: Node[] = []
     
       // Add sheet nodes
@@ -270,7 +267,6 @@ export default function TransformCanvas({
         // Check if there's a saved position for this sheet
         const savedNode = savedLayout?.nodes?.find((n: any) => n.id === `sheet-${sheet.id}`)
         const position = savedNode?.position || { x: 50, y: 50 + index * 150 }
-        (`DEBUG: Sheet ${sheet.id} - savedNode:`, savedNode, 'position:', position)
         
         initialNodes.push({
           id: `sheet-${sheet.id}`,
@@ -318,7 +314,6 @@ export default function TransformCanvas({
         const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
         if (joinsResponse.ok) {
           const joinsData = await joinsResponse.json()
-          ('DEBUG: Loaded joins:', joinsData.joins)
           
           joinsData.joins.forEach((join: any) => {
             const savedNode = savedLayout?.nodes?.find((n: any) => n.id === `join-${join.id}`)
@@ -362,7 +357,6 @@ export default function TransformCanvas({
                   setDataViewerOpen(true)
                 },
                 onEdit: (joinId: number) => {
-                  ('Edit join:', joinId)
                 },
                 onUpdateJoin: async (joinId: number, joinConfig: any) => {
                   try {
@@ -406,7 +400,6 @@ export default function TransformCanvas({
                       const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
                       if (joinsResponse.ok) {
                         const joinsData = await joinsResponse.json()
-                        ('Refreshed joins after update:', joinsData.joins)
                         // The useEffect will handle updating the nodes
                       }
                     } else {
@@ -950,7 +943,6 @@ export default function TransformCanvas({
             setDataViewerOpen(true)
           },
           onEdit: (joinId: number) => {
-            ('Edit join:', joinId)
           },
           onUpdateJoin: async (joinId: number, joinConfig: any) => {
             try {
@@ -994,7 +986,6 @@ export default function TransformCanvas({
                 const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
                 if (joinsResponse.ok) {
                   const joinsData = await joinsResponse.json()
-                  ('Refreshed joins after update:', joinsData.joins)
                   // The useEffect will handle updating the nodes
                 }
               } else {
@@ -1122,6 +1113,11 @@ export default function TransformCanvas({
       // Add the node to the canvas
       setNodes(nodes => [...nodes, newJoinNode])
       setHasUnsavedChanges(true)
+      
+      // Notify parent component about the new join
+      if (onJoinCreated) {
+        await onJoinCreated()
+      }
       
     } catch (error) {
       console.error('Error creating join:', error)

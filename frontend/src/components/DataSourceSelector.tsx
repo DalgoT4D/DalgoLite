@@ -103,7 +103,44 @@ export default function DataSourceSelector({
             })
           }
 
-          // 3. Add project combined data option if there are transformations
+          // 3. Get completed joins for this project
+          const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
+          if (joinsResponse.ok) {
+            const joinsData = await joinsResponse.json()
+            console.log('DataSourceSelector: Raw joins data:', joinsData)
+            const completedJoins = joinsData.joins?.filter((join: any) => join.status === 'completed') || []
+            console.log('DataSourceSelector: Completed joins:', completedJoins)
+            
+            completedJoins.forEach((join: any) => {
+              const outputColumns = join.output_columns || []
+              console.error(`🔍 DEBUGGING JOIN: ${join.name}`)
+              console.error(`🔍 Columns length: ${outputColumns.length}`)
+              console.error(`🔍 All columns:`, outputColumns)
+              
+              // Temporary alert for debugging
+              if (join.name === 'EB Join') {
+                alert(`DEBUG: ${join.name} has ${outputColumns.length} columns. First 3: ${outputColumns.slice(0, 3).join(', ')}`)
+              }
+              
+              const sourceData = {
+                id: `join-${join.id}`,
+                type: 'transformation', // Use 'transformation' type for consistency with chart creation
+                name: `${join.name} (Join)`,
+                columns: outputColumns,
+                metadata: {
+                  project_name: project.name,
+                  transformation_step: join.name,
+                  join_id: join.id,
+                  output_table_name: join.output_table_name
+                }
+              }
+              
+              console.log(`DataSourceSelector: Created source with ${sourceData.columns.length} columns`)
+              sources.push(sourceData)
+            })
+          }
+
+          // 4. Add project combined data option if there are transformations
           if (sources.some(s => s.type === 'transformation')) {
             try {
               const projectDataResponse = await fetch(`http://localhost:8000/projects/${projectId}/data-sources`)
@@ -157,6 +194,7 @@ export default function DataSourceSelector({
         }
       }
 
+      console.log('DataSourceSelector: Fetched data sources:', sources)
       setDataSources(sources)
     } catch (error) {
       console.error('Error fetching data sources:', error)
@@ -258,6 +296,7 @@ export default function DataSourceSelector({
                       key={source.id}
                       type="button"
                       onClick={() => {
+                        console.log('DataSourceSelector: Selected source:', source)
                         onSourceSelect(source)
                         setShowDropdown(false)
                       }}

@@ -416,6 +416,7 @@ async def analyze_sheet(sheet_data: Dict[str, Any], db: Session = Depends(get_db
                 df.to_sql(warehouse_table_name, engine, if_exists='replace', index=False)
             except Exception as warehouse_error:
                 # Continue anyway - this is not a critical error for the initial connection
+                pass
         
         # Generate chart recommendations
         recommendations = generate_chart_recommendations(values)
@@ -958,6 +959,506 @@ async def delete_chart(chart_id: int, db: Session = Depends(get_db)):
             raise HTTPException(status_code=404, detail="Chart not found")
         
         return {"message": "Chart deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/charts")
+async def get_all_charts(db: Session = Depends(get_db)):
+    """Get all charts across all sources with metadata"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        chart_repo = ChartRepository(db)
+        sheet_repo = SheetRepository(db)
+        
+        # Get all charts
+        charts = db.query(SavedChart).order_by(SavedChart.updated_at.desc()).all()
+        
+        enriched_charts = []
+        for chart in charts:
+            chart_data = {
+                "id": chart.id,
+                "chart_name": chart.chart_name,
+                "chart_type": chart.chart_type,
+                "x_axis_column": chart.x_axis_column,
+                "y_axis_column": chart.y_axis_column,
+                "chart_config": chart.chart_config,
+                "created_at": chart.created_at.isoformat(),
+                "updated_at": chart.updated_at.isoformat(),
+                "source_type": None,
+                "source_name": "Unknown Source",
+                "source_id": None
+            }
+            
+            # Add source metadata
+            if chart.sheet_id:
+                sheet = sheet_repo.get_sheet_by_id(chart.sheet_id)
+                if sheet:
+                    chart_data.update({
+                        "source_type": "sheet",
+                        "source_name": sheet.title,
+                        "source_id": chart.sheet_id
+                    })
+            elif chart.project_id:
+                # Get project info
+                project = db.query(TransformationProject).filter(TransformationProject.id == chart.project_id).first()
+                if project:
+                    chart_data.update({
+                        "source_type": "project", 
+                        "source_name": project.name,
+                        "source_id": chart.project_id
+                    })
+            
+            enriched_charts.append(chart_data)
+        
+        return {"charts": enriched_charts}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Unified chart creation endpoint
+class UnifiedChartCreateRequest(BaseModel):
+    chart_name: str
+    chart_type: str
+    x_axis_column: str
+    y_axis_column: Optional[str] = None
+    chart_config: Optional[dict] = {}
+    # Source identification
+    source_type: str  # 'sheet', 'transformation', 'join'
+    source_id: int    # ID of the source (sheet_id, step_id, join_id)
+    project_id: Optional[int] = None  # Required for transformation/join sources
+
+@app.post("/charts/unified")
+async def create_unified_chart(chart_request: UnifiedChartCreateRequest, db: Session = Depends(get_db)):
+    """Create a chart from any source type (sheet, AI transformation, join)"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        chart_repo = ChartRepository(db)
+        
+        # Validate source exists and determine chart associations
+        sheet_id = None
+        project_id = chart_request.project_id
+        
+        if chart_request.source_type == "sheet":
+            sheet_repo = SheetRepository(db)
+            sheet = sheet_repo.get_sheet_by_id(chart_request.source_id)
+            if not sheet:
+                raise HTTPException(status_code=404, detail="Sheet not found")
+            sheet_id = chart_request.source_id
+            
+        elif chart_request.source_type == "transformation":
+            # Validate transformation step exists (any project)
+            step = db.query(AITransformationStep).filter(
+                AITransformationStep.id == chart_request.source_id
+            ).first()
+            if not step:
+                raise HTTPException(status_code=404, detail="Transformation step not found")
+                
+        elif chart_request.source_type == "join":
+            # Validate join exists (any project) 
+            join_repo = JoinRepository(db)
+            join_op = join_repo.get_join_by_id(chart_request.source_id)
+            if not join_op:
+                raise HTTPException(status_code=404, detail="Join operation not found")
+        else:
+            raise HTTPException(status_code=400, detail="Invalid source_type. Must be 'sheet', 'transformation', or 'join'")
+        
+        # Store source info in chart config for data retrieval
+        chart_config = chart_request.chart_config or {}
+        chart_config.update({
+            "source_type": chart_request.source_type,
+            "source_id": chart_request.source_id
+        })
+        
+        # Create chart (unified charts don't need project_id)
+        chart_id = chart_repo.create_chart(
+            sheet_id=sheet_id,
+            chart_name=chart_request.chart_name,
+            chart_type=chart_request.chart_type,
+            x_axis_column=chart_request.x_axis_column,
+            y_axis_column=chart_request.y_axis_column,
+            chart_config=chart_config,
+            project_id=None  # Unified charts are project-agnostic
+        )
+        
+        return {
+            "chart_id": chart_id,
+            "message": "Chart created successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/charts/{chart_id}/data")
+async def get_chart_data(chart_id: int, db: Session = Depends(get_db)):
+    """Get chart data for visualization"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        chart_repo = ChartRepository(db)
+        chart = chart_repo.get_chart_by_id(chart_id)
+        
+        if not chart:
+            raise HTTPException(status_code=404, detail="Chart not found")
+        
+        # Get data based on chart source (check config first, then fallback to legacy fields)
+        source_type = chart.chart_config.get("source_type")
+        source_id = chart.chart_config.get("source_id")
+        
+        if source_type == "sheet" or chart.sheet_id:
+            # Get data from Google Sheet
+            sheet_id = source_id or chart.sheet_id
+            sheet_repo = SheetRepository(db)
+            sheet = sheet_repo.get_sheet_by_id(sheet_id)
+            if not sheet:
+                raise HTTPException(status_code=404, detail="Sheet not found")
+            
+            # Fetch fresh data from Google Sheets
+            try:
+                creds = get_refreshed_credentials()
+                if creds is None:
+                    raise HTTPException(status_code=500, detail="Could not get valid credentials")
+                service = build('sheets', 'v4', credentials=creds)
+                
+                # Try different range formats if the sheet name has issues
+                try:
+                    result = service.spreadsheets().values().get(
+                        spreadsheetId=sheet.spreadsheet_id,
+                        range=f"'{sheet.sheet_name}'!A:ZZ"  # Quote the sheet name
+                    ).execute()
+                except Exception as range_error:
+                    try:
+                        # Try without sheet name, just get all data
+                        result = service.spreadsheets().values().get(
+                            spreadsheetId=sheet.spreadsheet_id,
+                            range="A:ZZ"
+                        ).execute()
+                    except Exception as fallback_error:
+                        raise Exception(f"Range parsing failed: {str(range_error)}. Fallback also failed: {str(fallback_error)}")
+                
+                values = result.get('values', [])
+                if not values:
+                    raise HTTPException(status_code=404, detail="No data found in sheet")
+                    
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to fetch sheet data: {str(e)}")
+                
+        elif source_type == "join":
+            # Get data from specific join table
+            try:
+                join_repo = JoinRepository(db) 
+                join_op = join_repo.get_join_by_id(source_id)
+                if not join_op or join_op.status != 'completed':
+                    raise HTTPException(status_code=404, detail="Join operation not completed")
+                    
+                with engine.connect() as conn:
+                    result = conn.execute(text(f"SELECT * FROM {join_op.output_table_name} LIMIT 1000"))
+                    rows = result.fetchall()
+                    
+                    if not rows:
+                        raise HTTPException(status_code=404, detail="No data in join table")
+                    
+                    columns = list(result.keys())
+                    values = [columns] + [list(row) for row in rows]
+                    
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to fetch join data: {str(e)}")
+                
+        elif source_type == "transformation":
+            # Get data from specific transformation table  
+            try:
+                step = db.query(AITransformationStep).filter(
+                    AITransformationStep.id == source_id
+                ).first()
+                if not step or step.status != 'completed':
+                    raise HTTPException(status_code=404, detail="Transformation step not completed")
+                    
+                # Find the transformation output table
+                table_name = f"transform_step_{source_id}"
+                with engine.connect() as conn:
+                    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"), 
+                                        {"pattern": f"%{table_name}%"})
+                    table_names = [row[0] for row in result.fetchall()]
+                    if not table_names:
+                        raise HTTPException(status_code=404, detail="Transformation output table not found")
+                        
+                    result = conn.execute(text(f"SELECT * FROM {table_names[0]} LIMIT 1000"))
+                    rows = result.fetchall()
+                    
+                    if not rows:
+                        raise HTTPException(status_code=404, detail="No data in transformation table")
+                    
+                    columns = list(result.keys())
+                    values = [columns] + [list(row) for row in rows]
+                    
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to fetch transformation data: {str(e)}")
+                
+        elif chart.project_id:
+            # Get data from project (transformation or join)
+            # For now, try to get data from the most recent executed transformation or join
+            # This is a simplified approach - in practice you'd need more specific logic
+            try:
+                with engine.connect() as conn:
+                    # Try to find the most relevant table for this project
+                    result = conn.execute(text("""
+                        SELECT name FROM sqlite_master 
+                        WHERE type='table' 
+                        AND (name LIKE 'join_%' OR name LIKE 'transformed_%' OR name LIKE 'step_%')
+                        AND name LIKE '%_' || :project_id || '_%'
+                        ORDER BY name DESC LIMIT 1
+                    """), {"project_id": chart.project_id})
+                    
+                    row = result.fetchone()
+                    if not row:
+                        raise HTTPException(status_code=404, detail="No data found for this project")
+                    
+                    table_name = row[0]
+                    result = conn.execute(text(f"SELECT * FROM {table_name} LIMIT 1000"))
+                    rows = result.fetchall()
+                    
+                    if not rows:
+                        raise HTTPException(status_code=404, detail="No data in project table")
+                    
+                    # Convert to list format
+                    columns = list(result.keys())
+                    values = [columns] + [list(row) for row in rows]
+                    
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to fetch project data: {str(e)}")
+        else:
+            raise HTTPException(status_code=400, detail="Chart has no valid data source")
+        
+        # Process data for chart visualization
+        if not values or len(values) < 2:
+            raise HTTPException(status_code=404, detail="Insufficient data for chart")
+        
+        headers = values[0]
+        data_rows = values[1:]
+        
+        # Find column indices
+        try:
+            x_col_idx = headers.index(chart.x_axis_column)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Column '{chart.x_axis_column}' not found")
+        
+        y_col_idx = None
+        if chart.y_axis_column:
+            try:
+                y_col_idx = headers.index(chart.y_axis_column)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Column '{chart.y_axis_column}' not found")
+        
+        # Process data based on chart type
+        processed_data = process_chart_data(data_rows, x_col_idx, y_col_idx, chart.chart_type, chart.chart_config)
+        
+        return {
+            "chart_id": chart.id,
+            "chart_name": chart.chart_name,
+            "chart_type": chart.chart_type,
+            "data": processed_data["data"],
+            "options": processed_data["options"]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Chart data endpoint error: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Chart data error: {str(e)}")
+
+def process_chart_data(data_rows, x_col_idx, y_col_idx, chart_type, chart_config):
+    """Process raw data into Chart.js format"""
+    import pandas as pd
+    from collections import Counter
+    
+    # Extract x-axis values
+    x_values = [str(row[x_col_idx]) if len(row) > x_col_idx else '' for row in data_rows if row]
+    
+    if chart_type.lower() == 'pie':
+        # For pie charts, count occurrences of each x value
+        counts = Counter(x_values)
+        labels = list(counts.keys())
+        data = list(counts.values())
+        
+        return {
+            "data": {
+                "labels": labels,
+                "datasets": [{
+                    "data": data,
+                    "backgroundColor": [
+                        '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', 
+                        '#9966FF', '#FF9F40', '#C9CBCF', '#4BC0C0'
+                    ][:len(data)]
+                }]
+            },
+            "options": {
+                "responsive": True,
+                "plugins": {
+                    "legend": {
+                        "position": "top"
+                    }
+                }
+            }
+        }
+    
+    elif y_col_idx is not None:
+        # For charts with both X and Y axes
+        y_values = []
+        labels = []
+        
+        for row in data_rows:
+            if len(row) > max(x_col_idx, y_col_idx):
+                try:
+                    x_val = str(row[x_col_idx])
+                    y_val = float(row[y_col_idx]) if row[y_col_idx] else 0
+                    labels.append(x_val)
+                    y_values.append(y_val)
+                except (ValueError, IndexError):
+                    continue
+        
+        return {
+            "data": {
+                "labels": labels,
+                "datasets": [{
+                    "label": chart_config.get("y_axis_label", "Values"),
+                    "data": y_values,
+                    "backgroundColor": '#36A2EB',
+                    "borderColor": '#36A2EB',
+                    "borderWidth": 1
+                }]
+            },
+            "options": {
+                "responsive": True,
+                "scales": {
+                    "y": {
+                        "beginAtZero": True
+                    }
+                }
+            }
+        }
+    else:
+        # For single-axis charts (like histograms), count occurrences
+        counts = Counter(x_values)
+        labels = list(counts.keys())
+        data = list(counts.values())
+        
+        return {
+            "data": {
+                "labels": labels,
+                "datasets": [{
+                    "label": "Count",
+                    "data": data,
+                    "backgroundColor": '#36A2EB',
+                    "borderColor": '#36A2EB',
+                    "borderWidth": 1
+                }]
+            },
+            "options": {
+                "responsive": True,
+                "scales": {
+                    "y": {
+                        "beginAtZero": True
+                    }
+                }
+            }
+        }
+
+@app.get("/data-sources")
+async def get_all_data_sources(db: Session = Depends(get_db)):
+    """Get all available data sources (sheets, AI transformations, joins) for chart creation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        data_sources = []
+        
+        # Get all connected sheets
+        sheet_repo = SheetRepository(db)
+        sheets = sheet_repo.get_all_sheets()
+        
+        for sheet in sheets:
+            data_sources.append({
+                "id": f"sheet-{sheet.id}",
+                "type": "sheet",
+                "name": sheet.title,
+                "display_name": f"📊 {sheet.title}",
+                "columns": sheet.columns or [],
+                "metadata": {
+                    "total_rows": sheet.total_rows,
+                    "sheet_name": sheet.sheet_name
+                }
+            })
+        
+        # Get all AI transformation steps
+        ai_steps = db.query(AITransformationStep).filter(
+            AITransformationStep.status == 'completed'
+        ).all()
+        
+        for step in ai_steps:
+            # Get project info for context
+            project = db.query(TransformationProject).filter(
+                TransformationProject.id == step.project_id
+            ).first()
+            
+            data_sources.append({
+                "id": f"transform-{step.id}",
+                "type": "transformation", 
+                "name": f"{step.step_name} ({project.name if project else 'Unknown Project'})",
+                "display_name": f"🔄 {step.step_name}",
+                "columns": step.output_columns or [],
+                "metadata": {
+                    "project_id": step.project_id,
+                    "project_name": project.name if project else "Unknown Project",
+                    "output_table_name": step.output_table_name,
+                    "execution_order": step.execution_order
+                }
+            })
+        
+        # Get all completed joins
+        join_repo = JoinRepository(db)
+        joins = db.query(JoinOperation).filter(
+            JoinOperation.status == 'completed'
+        ).all()
+        
+        for join in joins:
+            # Get project info for context
+            project = db.query(TransformationProject).filter(
+                TransformationProject.id == join.project_id
+            ).first()
+            
+            # Use actual output columns from the completed join
+            actual_columns = join.output_columns or []
+            
+            data_sources.append({
+                "id": f"join-{join.id}",
+                "type": "join",
+                "name": f"{join.name} ({project.name if project else 'Unknown Project'})",
+                "display_name": f"🔗 {join.name}",
+                "columns": actual_columns,
+                "metadata": {
+                    "project_id": join.project_id,
+                    "project_name": project.name if project else "Unknown Project",
+                    "join_type": join.join_type,
+                    "left_table": join.left_table_name if hasattr(join, 'left_table_name') else "Unknown",
+                    "right_table": join.right_table_name if hasattr(join, 'right_table_name') else "Unknown",
+                    "output_table_name": join.output_table_name
+                }
+            })
+        
+        return {"data_sources": data_sources}
         
     except HTTPException:
         raise
@@ -3153,12 +3654,16 @@ async def execute_transformation_step(step_id: int, db: Session = Depends(get_db
                             # Use warehouse data instead of Google Sheets API calls
                             df = fetch_full_sheet_data(sheet)
                             if df is not None and not df.empty:
+                                pass
                             else:
+                                pass
                         except Exception as e:
+                            pass
                         
                         # Fallback to sample data only if Google Sheets fetch fails
                         if df is None or df.empty:
                             if sheet.sample_data and sheet.columns:
+                                pass
                             df_data = {}
                             for i, col in enumerate(sheet.columns):
                                 column_data = []
@@ -3526,6 +4031,120 @@ async def get_transformation_recommendations(step_id: int, db: Session = Depends
                     "x_axis": date_col,
                     "y_axis": num_col,
                     "reason": f"Shows trends and patterns over time"
+                })
+        
+        return {"recommendations": recommendations[:6]}  # Return top 6 recommendations
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/joins/{join_id}/recommendations")
+async def get_join_recommendations(join_id: int, db: Session = Depends(get_db)):
+    """Get chart recommendations for a completed join operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get the join operation
+        join_repo = JoinRepository(db)
+        join_op = join_repo.get_join_by_id(join_id)
+        
+        if not join_op:
+            raise HTTPException(status_code=404, detail="Join operation not found")
+            
+        if join_op.status != 'completed':
+            return {"recommendations": []}
+        
+        # Generate recommendations based on output columns
+        recommendations = []
+        if join_op.output_columns and len(join_op.output_columns) > 0:
+            columns = join_op.output_columns
+            
+            # Categorize columns based on names (heuristic)
+            numeric_columns = []
+            categorical_columns = []
+            date_columns = []
+            
+            for col in columns:
+                col_lower = col.lower()
+                if any(word in col_lower for word in ['amount', 'count', 'total', 'sum', 'value', 'price', 'cost', 'revenue', 'age', 'score', 'rating', 'number', 'qty', 'quantity']):
+                    numeric_columns.append(col)
+                elif any(word in col_lower for word in ['date', 'time', 'created', 'updated', 'timestamp']):
+                    date_columns.append(col)
+                else:
+                    categorical_columns.append(col)
+            
+            # Generate basic recommendations for joined data
+            if categorical_columns:
+                main_cat = categorical_columns[0]
+                recommendations.append({
+                    "type": "pie",
+                    "title": f"Distribution of {main_cat}",
+                    "description": f"Breakdown of {main_cat.lower()} values from joined tables",
+                    "x_axis": main_cat,
+                    "y_axis": None,
+                    "reason": f"Shows the distribution of categories in your joined data"
+                })
+                
+                recommendations.append({
+                    "type": "bar",
+                    "title": f"Count by {main_cat}",
+                    "description": f"Count of items for each {main_cat.lower()}",
+                    "x_axis": main_cat,
+                    "y_axis": None,
+                    "reason": f"Visualizes frequency of each {main_cat.lower()} category"
+                })
+            
+            # Numeric analysis with joined data context
+            if numeric_columns and categorical_columns:
+                num_col = numeric_columns[0]
+                cat_col = categorical_columns[0]
+                recommendations.append({
+                    "type": "bar",
+                    "title": f"{num_col} by {cat_col}",
+                    "description": f"Compare {num_col.lower()} across different {cat_col.lower()}",
+                    "x_axis": cat_col,
+                    "y_axis": num_col,
+                    "reason": f"Shows how {num_col} varies across {cat_col} from joined tables"
+                })
+            
+            # Correlation analysis for joined data
+            if len(numeric_columns) >= 2:
+                recommendations.append({
+                    "type": "scatter",
+                    "title": f"{numeric_columns[0]} vs {numeric_columns[1]}",
+                    "description": f"Relationship between {numeric_columns[0]} and {numeric_columns[1]}",
+                    "x_axis": numeric_columns[0],
+                    "y_axis": numeric_columns[1],
+                    "reason": f"Identifies correlations that emerge from joining your data sources"
+                })
+            
+            # Time series analysis with joined data
+            if date_columns and numeric_columns:
+                date_col = date_columns[0]
+                num_col = numeric_columns[0]
+                recommendations.append({
+                    "type": "line",
+                    "title": f"{num_col} Over Time (Joined Data)",
+                    "description": f"Trend of {num_col.lower()} over {date_col.lower()} from joined tables",
+                    "x_axis": date_col,
+                    "y_axis": num_col,
+                    "reason": f"Shows trends over time from your joined datasets"
+                })
+            
+            # Multi-table analysis specific to joins
+            if len(categorical_columns) >= 2:
+                cat1 = categorical_columns[0]
+                cat2 = categorical_columns[1]
+                recommendations.append({
+                    "type": "bar",
+                    "title": f"{cat2} Distribution by {cat1}",
+                    "description": f"Cross-table analysis of {cat2.lower()} across different {cat1.lower()}",
+                    "x_axis": cat1,
+                    "y_axis": cat2,
+                    "reason": f"Reveals patterns that emerge from joining different data sources"
                 })
         
         return {"recommendations": recommendations[:6]}  # Return top 6 recommendations

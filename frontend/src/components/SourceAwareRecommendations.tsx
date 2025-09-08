@@ -45,6 +45,12 @@ export default function SourceAwareRecommendations({
 
   const fetchRecommendations = async () => {
     setLoading(true)
+    console.log('SourceAwareRecommendations: Starting recommendation fetch for sources:', dataSources.map(s => s.name))
+    
+    // Clear previous recommendations to avoid stale data
+    setRecommendations([])
+    setSelectedSourceFilter('all') // Reset filter to show all sources
+    
     try {
       const allRecommendations: SourcedRecommendation[] = []
 
@@ -54,27 +60,41 @@ export default function SourceAwareRecommendations({
           
           if (source.type === 'sheet') {
             const sheetIdFromSource = source.id.replace('sheet-', '')
+            console.log(`SourceAwareRecommendations: Fetching sheet recommendations for ID: ${sheetIdFromSource}`)
             response = await fetch(`http://localhost:8000/sheets/${sheetIdFromSource}/recommendations`)
           } else if (source.type === 'transformation') {
-            const stepId = source.id.replace('transform-', '')
-            response = await fetch(`http://localhost:8000/ai-transformations/${stepId}/recommendations`)
+            // Check if this is a join or AI transformation
+            if (source.id.startsWith('join-')) {
+              const joinId = source.id.replace('join-', '')
+              console.log(`SourceAwareRecommendations: Fetching join recommendations for ID: ${joinId}`)
+              response = await fetch(`http://localhost:8000/joins/${joinId}/recommendations`)
+            } else {
+              const stepId = source.id.replace('transform-', '')
+              console.log(`SourceAwareRecommendations: Fetching AI transformation recommendations for ID: ${stepId}`)
+              response = await fetch(`http://localhost:8000/ai-transformations/${stepId}/recommendations`)
+            }
           } else if (source.type === 'project' && projectId) {
+            console.log(`SourceAwareRecommendations: Fetching project recommendations for ID: ${projectId}`)
             response = await fetch(`http://localhost:8000/projects/${projectId}/recommendations`)
           }
 
           if (response?.ok) {
             const data = await response.json()
+            console.log(`SourceAwareRecommendations: Got ${data.recommendations?.length || 0} recommendations for ${source.name}`, data)
             const sourceRecommendations = (data.recommendations || []).map((rec: any) => ({
               ...rec,
               source
             }))
             allRecommendations.push(...sourceRecommendations)
+          } else if (response) {
+            console.error(`SourceAwareRecommendations: Failed to fetch recommendations for ${source.name}:`, response.status, response.statusText)
           }
         } catch (error) {
           console.error(`Error fetching recommendations for ${source.name}:`, error)
         }
       }
 
+      console.log(`SourceAwareRecommendations: Final total recommendations: ${allRecommendations.length}`)
       setRecommendations(allRecommendations)
     } catch (error) {
       console.error('Error fetching recommendations:', error)

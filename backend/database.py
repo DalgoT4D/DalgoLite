@@ -390,9 +390,11 @@ class ChartRepository:
         self.db = db
     
     def create_chart(self, sheet_id: int, chart_name: str, chart_type: str,
-                    x_axis_column: str, y_axis_column: str, chart_config: Dict[str, Any]) -> SavedChart:
+                    x_axis_column: str, y_axis_column: str, chart_config: Dict[str, Any], 
+                    project_id: Optional[int] = None) -> SavedChart:
         new_chart = SavedChart(
             sheet_id=sheet_id,
+            project_id=project_id,
             chart_name=chart_name,
             chart_type=chart_type,
             x_axis_column=x_axis_column,
