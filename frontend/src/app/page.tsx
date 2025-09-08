@@ -178,7 +178,7 @@ export default function LandingPage() {
               </div>
               <h3 className="text-xl font-semibold text-gray-900 mb-3">Data Transformation</h3>
               <p className="text-gray-600">
-                Merge multiple sheets, create automated pipelines, and transform raw data into insights with simple to expert modes.
+                Merge multiple sheets, create automated pipelines, and transform raw data into insights with an intuitive visual canvas.
               </p>
             </div>
           </div>

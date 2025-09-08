@@ -7,6 +7,7 @@ const anekLatin = Anek_Latin({
   subsets: ['latin'],
   display: 'swap',
 })
+import { SidebarProvider } from '@/contexts/SidebarContext'
 
 export const metadata: Metadata = {
   title: 'DalgoLite - Smart Data Analytics',
@@ -22,7 +23,9 @@ export default function RootLayout({
     <html lang="en">
       <body className={`bg-gray-50 ${anekLatin.className}`}>
         <AuthProvider>
-          {children}
+          <SidebarProvider>
+            {children}
+          </SidebarProvider>
         </AuthProvider>
       </body>
     </html>

@@ -53,7 +53,6 @@ class TransformationProject(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
     description = Column(Text)
-    mode = Column(String, default='simple')  # simple, advanced, expert
     sheet_ids = Column(JSON)  # Array of connected sheet IDs
     join_config = Column(JSON)  # Join specifications
     transformations = Column(JSON)  # List of transformation rules
@@ -61,10 +60,72 @@ class TransformationProject(Base):
     last_pipeline_run = Column(DateTime)
     schedule_config = Column(JSON)  # Scheduling configuration
     warehouse_table_name = Column(String)  # Name of materialized table in warehouse
+    canvas_layout = Column(JSON)  # Store canvas node positions and connections
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Relationships will be added later after proper FK setup
+
+class AITransformationStep(Base):
+    __tablename__ = "ai_transformation_steps"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("transformation_projects.id"), nullable=False)
+    step_name = Column(String, nullable=False)
+    user_prompt = Column(Text, nullable=False)  # Natural language description
+    output_table_name = Column(String)  # Custom output table name
+    generated_code = Column(Text, nullable=False)  # AI-generated pandas code
+    code_summary = Column(String)  # One-sentence summary
+    code_explanation = Column(Text)  # Detailed explanation
+    input_columns = Column(JSON)  # Expected input columns
+    output_columns = Column(JSON)  # Expected output columns after transformation
+    upstream_step_ids = Column(JSON)  # IDs of upstream transformation steps
+    upstream_sheet_ids = Column(JSON)  # IDs of upstream sheets
+    canvas_position = Column(JSON)  # Position on canvas (x, y coordinates)
+    execution_order = Column(Integer, default=0)  # Order of execution in pipeline
+    status = Column(String, default='draft')  # draft, ready, running, completed, failed
+    error_message = Column(Text)  # Error message if execution fails
+    last_executed = Column(DateTime)
+    execution_time_ms = Column(Integer)  # Execution time in milliseconds
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    # Relationships
+    project = relationship("TransformationProject")
+
+class CanvasNode(Base):
+    __tablename__ = "canvas_nodes"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("transformation_projects.id"), nullable=False)
+    node_type = Column(String, nullable=False)  # 'sheet', 'transformation', 'output'
+    node_id = Column(String, nullable=False)  # Reference to sheet ID or transformation step ID
+    position_x = Column(Integer, default=0)
+    position_y = Column(Integer, default=0)
+    width = Column(Integer, default=200)
+    height = Column(Integer, default=100)
+    style_config = Column(JSON)  # Node styling and display options
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    # Relationships
+    project = relationship("TransformationProject")
+
+class CanvasConnection(Base):
+    __tablename__ = "canvas_connections"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("transformation_projects.id"), nullable=False)
+    source_node_id = Column(Integer, ForeignKey("canvas_nodes.id"), nullable=False)
+    target_node_id = Column(Integer, ForeignKey("canvas_nodes.id"), nullable=False)
+    connection_type = Column(String, default='data_flow')  # Type of connection
+    style_config = Column(JSON)  # Connection styling options
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    # Relationships
+    project = relationship("TransformationProject")
+    source_node = relationship("CanvasNode", foreign_keys=[source_node_id])
+    target_node = relationship("CanvasNode", foreign_keys=[target_node_id])
 
 class TransformedDataWarehouse(Base):
     __tablename__ = "transformed_data_warehouse"
@@ -75,6 +136,30 @@ class TransformedDataWarehouse(Base):
     row_count = Column(Integer, default=0)
     column_schema = Column(JSON)  # Store column names and types
     data_hash = Column(String)  # Hash of the data for change detection
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    # Relationships
+    project = relationship("TransformationProject")
+
+class JoinOperation(Base):
+    __tablename__ = "join_operations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("transformation_projects.id"), nullable=False)
+    name = Column(String, nullable=False)
+    left_table_id = Column(Integer, nullable=False)  # Sheet or transformation step ID
+    right_table_id = Column(Integer, nullable=False)  # Sheet or transformation step ID
+    left_table_type = Column(String, nullable=False)  # 'sheet' or 'transformation'
+    right_table_type = Column(String, nullable=False)  # 'sheet' or 'transformation'
+    join_type = Column(String, nullable=False)  # 'inner', 'left', 'right', 'full'
+    join_keys = Column(JSON, nullable=False)  # Array of {left: column, right: column}
+    status = Column(String, default='pending')  # 'pending', 'completed', 'failed'
+    error_message = Column(Text)
+    output_table_name = Column(String)  # Generated result table name
+    output_columns = Column(JSON)  # Resulting columns after join
+    canvas_position = Column(JSON)  # Position on canvas (x, y coordinates)
+    execution_time_ms = Column(Integer)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
@@ -144,8 +229,14 @@ def migrate_database():
             ('pipeline_status', 'TEXT DEFAULT "draft"'),
             ('last_pipeline_run', 'DATETIME'),
             ('schedule_config', 'TEXT'),
-            ('warehouse_table_name', 'TEXT')
+            ('warehouse_table_name', 'TEXT'),
+            ('canvas_layout', 'TEXT')
         ]
+        
+        # Check if mode column exists and needs to be removed
+        # Note: SQLite doesn't support DROP COLUMN, but we can ignore the column
+        if 'mode' in existing_columns:
+            print("Note: mode column exists but will be ignored (SQLite doesn't support DROP COLUMN)")
         
         with engine.connect() as conn:
             for column_name, column_def in new_columns:
@@ -155,6 +246,17 @@ def migrate_database():
                     conn.commit()
         
         # Check if we need to update column constraints for project charts
+        print("Checking if ai_transformation_steps table needs output_table_name column...")
+        with engine.connect() as conn:
+            # Check if output_table_name column exists in ai_transformation_steps
+            if 'ai_transformation_steps' in existing_tables:
+                ai_steps_columns = [col['name'] for col in inspector.get_columns('ai_transformation_steps')]
+                if 'output_table_name' not in ai_steps_columns:
+                    print("Adding output_table_name column to ai_transformation_steps table...")
+                    conn.execute(text("ALTER TABLE ai_transformation_steps ADD COLUMN output_table_name TEXT"))
+                    conn.commit()
+                    print("Migration completed successfully")
+
         print("Checking if saved_charts table needs constraint updates...")
         with engine.connect() as conn:
             # Check if we need to migrate the table to allow nullable sheet_id
@@ -288,9 +390,11 @@ class ChartRepository:
         self.db = db
     
     def create_chart(self, sheet_id: int, chart_name: str, chart_type: str,
-                    x_axis_column: str, y_axis_column: str, chart_config: Dict[str, Any]) -> SavedChart:
+                    x_axis_column: str, y_axis_column: str, chart_config: Dict[str, Any], 
+                    project_id: Optional[int] = None) -> SavedChart:
         new_chart = SavedChart(
             sheet_id=sheet_id,
+            project_id=project_id,
             chart_name=chart_name,
             chart_type=chart_type,
             x_axis_column=x_axis_column,
@@ -342,12 +446,11 @@ class TransformationProjectRepository:
     def __init__(self, db: Session):
         self.db = db
     
-    def create_project(self, name: str, description: str, sheet_ids: List[int], mode: str = 'simple') -> TransformationProject:
+    def create_project(self, name: str, description: str, sheet_ids: List[int]) -> TransformationProject:
         project = TransformationProject(
             name=name,
             description=description,
             sheet_ids=sheet_ids,
-            mode=mode,
             join_config={},
             transformations=[]
         )
@@ -378,6 +481,89 @@ class TransformationProjectRepository:
         project = self.get_project_by_id(project_id)
         if project:
             self.db.delete(project)
+            self.db.commit()
+            return True
+        return False
+
+class JoinRepository:
+    def __init__(self, db: Session):
+        self.db = db
+    
+    def create_join(self, project_id: int, name: str, left_table_id: int, right_table_id: int,
+                   left_table_type: str, right_table_type: str, join_type: str, 
+                   join_keys: List[Dict[str, str]], canvas_position: Dict[str, int], 
+                   output_table_name: Optional[str] = None) -> JoinOperation:
+        # Generate table name if not provided
+        if not output_table_name or not output_table_name.strip():
+            output_table_name = f"join_{project_id}_{int(datetime.now().timestamp())}"
+        else:
+            # Clean up the provided name
+            import re
+            output_table_name = re.sub(r'[^\w]', '_', output_table_name.lower())
+        
+        join_op = JoinOperation(
+            project_id=project_id,
+            name=name,
+            left_table_id=left_table_id,
+            right_table_id=right_table_id,
+            left_table_type=left_table_type,
+            right_table_type=right_table_type,
+            join_type=join_type,
+            join_keys=join_keys,
+            canvas_position=canvas_position,
+            output_table_name=output_table_name
+        )
+        self.db.add(join_op)
+        self.db.commit()
+        self.db.refresh(join_op)
+        return join_op
+    
+    def get_joins_by_project(self, project_id: int) -> List[JoinOperation]:
+        return self.db.query(JoinOperation).filter(JoinOperation.project_id == project_id).order_by(JoinOperation.created_at.desc()).all()
+    
+    def get_join_by_id(self, join_id: int) -> Optional[JoinOperation]:
+        return self.db.query(JoinOperation).filter(JoinOperation.id == join_id).first()
+    
+    def update_join_status(self, join_id: int, status: str, error_message: str = None, 
+                          output_columns: List[str] = None, execution_time_ms: int = None) -> Optional[JoinOperation]:
+        join_op = self.get_join_by_id(join_id)
+        if join_op:
+            join_op.status = status
+            if error_message:
+                join_op.error_message = error_message
+            if output_columns:
+                join_op.output_columns = output_columns
+            if execution_time_ms:
+                join_op.execution_time_ms = execution_time_ms
+            join_op.updated_at = datetime.now(timezone.utc)
+            self.db.commit()
+            self.db.refresh(join_op)
+            return join_op
+        return None
+    
+    def update_join(self, join_id: int, name: str, output_table_name: Optional[str],
+                   left_table_id: int, right_table_id: int, left_table_type: str,
+                   right_table_type: str, join_type: str, join_keys: List[Dict[str, str]]) -> Optional[JoinOperation]:
+        join_op = self.get_join_by_id(join_id)
+        if join_op:
+            join_op.name = name
+            join_op.output_table_name = output_table_name
+            join_op.left_table_id = left_table_id
+            join_op.right_table_id = right_table_id
+            join_op.left_table_type = left_table_type
+            join_op.right_table_type = right_table_type
+            join_op.join_type = join_type
+            join_op.join_keys = join_keys
+            join_op.updated_at = datetime.utcnow()
+            
+            self.db.commit()
+            return join_op
+        return None
+    
+    def delete_join(self, join_id: int) -> bool:
+        join_op = self.get_join_by_id(join_id)
+        if join_op:
+            self.db.delete(join_op)
             self.db.commit()
             return True
         return False
