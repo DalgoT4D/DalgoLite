@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useSidebar } from '@/contexts/SidebarContext'
+import Logo from './Logo'
 import { 
   Home, 
   BarChart3, 
@@ -14,7 +15,6 @@ import {
   Menu,
   X
 } from 'lucide-react'
-import Logo from './Logo'
 
 interface SidebarProps {
   isAuthenticated: boolean
@@ -134,11 +134,17 @@ export default function Sidebar({ isAuthenticated, onLogout }: SidebarProps) {
       {/* Desktop Sidebar */}
       <div className="hidden lg:block">
         <div className={`fixed left-0 top-0 h-full bg-white border-r border-gray-200 shadow-sm transition-all duration-300 z-40 ${
-          isCollapsed ? 'w-16' : 'w-64'
+          isCollapsed ? 'w-20' : 'w-64'
         }`}>
           <div className="flex flex-col h-full">
             {/* Header */}
-            <div className="flex items-center justify-end p-4 border-b border-gray-200">
+            <div className="flex items-center justify-between p-4 border-b border-gray-200">
+              <button
+                onClick={() => router.push('/home')}
+                className="hover:opacity-80 transition-opacity"
+              >
+                <Logo size="sm" compact={isCollapsed} />
+              </button>
               <button
                 onClick={toggleCollapsed}
                 className="p-2 rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-50 transition-colors"
@@ -156,14 +162,14 @@ export default function Sidebar({ isAuthenticated, onLogout }: SidebarProps) {
                     <button
                       key={item.name}
                       onClick={() => router.push(item.href)}
-                      className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg text-left transition-colors ${
+                      className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} px-3 ${isCollapsed ? 'py-6' : 'py-3'} rounded-lg text-left transition-colors ${
                         isActive(item.href)
                           ? 'bg-blue-50 text-blue-700 border border-blue-200'
                           : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
                       }`}
                       title={isCollapsed ? item.name : ''}
                     >
-                      <Icon size={isCollapsed ? 24 : 20} />
+                      <Icon size={isCollapsed ? 48 : 20} />
                       {!isCollapsed && <span className="font-medium">{item.name}</span>}
                     </button>
                   )
@@ -175,10 +181,10 @@ export default function Sidebar({ isAuthenticated, onLogout }: SidebarProps) {
             <div className="p-4 border-t border-gray-200">
               <button
                 onClick={handleLogout}
-                className="w-full flex items-center gap-3 text-red-600 hover:text-red-700 px-3 py-3 rounded-lg transition-colors"
+                className={`w-full flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'} text-red-600 hover:text-red-700 px-3 ${isCollapsed ? 'py-6' : 'py-3'} rounded-lg transition-colors`}
                 title={isCollapsed ? 'Logout' : ''}
               >
-                <LogOut size={isCollapsed ? 24 : 20} />
+                <LogOut size={isCollapsed ? 48 : 20} />
                 {!isCollapsed && <span className="font-medium">Logout</span>}
               </button>
             </div>
