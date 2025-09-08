@@ -248,10 +248,10 @@ export default function SheetDetailsPage({ params }: { params: { id: string } })
                       </div>
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => router.push(`/charts?sheet=${sheet.id}#chart-${chart.id}`)}
+                          onClick={() => router.push(`/charts/${chart.id}/view?from=sheets&sourceId=${sheet.id}`)}
                           className="text-blue-600 hover:text-blue-700 text-sm font-medium"
                         >
-                          View
+                          View Chart
                         </button>
                         <button
                           onClick={() => router.push(`/charts?sheet=${sheet.id}&edit=${chart.id}`)}

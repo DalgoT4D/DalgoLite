@@ -1,6 +1,12 @@
 import './globals.css'
 import type { Metadata } from 'next'
 import { AuthProvider } from '@/contexts/AuthContext'
+import { Anek_Latin } from 'next/font/google'
+
+const anekLatin = Anek_Latin({
+  subsets: ['latin'],
+  display: 'swap',
+})
 import { SidebarProvider } from '@/contexts/SidebarContext'
 
 export const metadata: Metadata = {
@@ -15,7 +21,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-gray-50">
+      <body className={`bg-gray-50 ${anekLatin.className}`}>
         <AuthProvider>
           <SidebarProvider>
             {children}
