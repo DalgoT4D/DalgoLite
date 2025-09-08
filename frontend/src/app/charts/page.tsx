@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { BarChart3, Plus, Trash2, Edit2, Save, X, ArrowLeft, SidebarOpen, Filter, Lightbulb } from 'lucide-react'
+import { BarChart3, Plus, Trash2, Edit2, Save, X, ArrowLeft, SidebarOpen, Filter, Lightbulb, Eye } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import DashboardLayout from '@/components/DashboardLayout'
 import ChartRenderer from '@/components/ChartRenderer'
@@ -15,6 +15,7 @@ function ChartDisplay({ chartId }: ChartDisplayProps) {
   const [chartData, setChartData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const chartRef = useRef<any>(null)
 
   useEffect(() => {
     const fetchChartData = async () => {
@@ -36,6 +37,7 @@ function ChartDisplay({ chartId }: ChartDisplayProps) {
     fetchChartData()
   }, [chartId])
 
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -54,9 +56,48 @@ function ChartDisplay({ chartId }: ChartDisplayProps) {
 
   return (
     <ChartRenderer 
+      ref={chartRef}
       type={chartData.chart_type}
       data={chartData.data}
-      options={chartData.options}
+      options={{
+        ...chartData.options,
+        backgroundColor: '#ffffff',
+        plugins: {
+          ...chartData.options?.plugins,
+          legend: {
+            ...chartData.options?.plugins?.legend,
+            labels: {
+              ...chartData.options?.plugins?.legend?.labels,
+              color: '#374151', // Gray-700 for text
+            },
+          },
+        },
+        scales: {
+          ...chartData.options?.scales,
+          x: {
+            ...chartData.options?.scales?.x,
+            ticks: {
+              ...chartData.options?.scales?.x?.ticks,
+              color: '#6B7280', // Gray-500
+            },
+            grid: {
+              ...chartData.options?.scales?.x?.grid,
+              color: '#E5E7EB', // Gray-200
+            },
+          },
+          y: {
+            ...chartData.options?.scales?.y,
+            ticks: {
+              ...chartData.options?.scales?.y?.ticks,
+              color: '#6B7280', // Gray-500
+            },
+            grid: {
+              ...chartData.options?.scales?.y?.grid,
+              color: '#E5E7EB', // Gray-200
+            },
+          },
+        },
+      }}
       title={chartData.chart_name}
     />
   )
@@ -492,8 +533,17 @@ export default function UnifiedChartsPage() {
                             </div>
                           </div>
                           
-                          <div className="h-40 bg-gray-50 rounded-lg p-2">
+                          <div className="h-40 bg-gray-50 rounded-lg p-2 relative group">
                             <ChartDisplay chartId={chart.id} />
+                            <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-opacity rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100">
+                              <button
+                                onClick={() => router.push(`/charts/${chart.id}/view?from=charts`)}
+                                className="bg-white hover:bg-gray-100 text-gray-900 px-4 py-2 rounded-lg shadow-md flex items-center gap-2 transition-colors"
+                              >
+                                <Eye size={16} />
+                                View Larger
+                              </button>
+                            </div>
                           </div>
                         </div>
                   ))}
