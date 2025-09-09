@@ -6,6 +6,7 @@ import { BarChart3, Plus, Trash2, Edit2, Save, X, ArrowLeft, SidebarOpen, Filter
 import { useAuth } from '@/contexts/AuthContext'
 import DashboardLayout from '@/components/DashboardLayout'
 import ChartRenderer from '@/components/ChartRenderer'
+import ChatBot from '@/components/chat/ChatBot'
 
 interface ChartDisplayProps {
   chartId: number
@@ -809,6 +810,16 @@ export default function UnifiedChartsPage() {
             </div>
           </div>
         )}
+
+        {/* AI Chat Assistant */}
+        <ChatBot 
+          availableChartIds={charts.map(chart => chart.id)}
+          currentChartId={charts.length > 0 ? charts[0].id : undefined}
+          context={{
+            page: 'charts',
+            total_charts: charts.length
+          }}
+        />
       </div>
     </DashboardLayout>
   )
