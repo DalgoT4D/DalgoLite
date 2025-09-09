@@ -2,7 +2,6 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { MessageCircle, Send, X, Minimize2, Maximize2 } from 'lucide-react'
-import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface Message {
   id: string
@@ -123,7 +122,7 @@ export default function ChatWidget({ chartId, sheetId, projectId, context, onCha
         project_id: projectId
       }
 
-      const response = await fetch(getApiUrl('/chat', {
+      const response = await fetch('http://localhost:8005/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

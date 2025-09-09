@@ -38,7 +38,7 @@ export default function Dashboard() {
   const fetchConnectedSheets = async () => {
     try {
       setLoading(true)
-      const response = await fetch(getApiUrl('/sheets/connected'))
+      const response = await fetch('http://localhost:8005/sheets/connected')
       if (response.ok) {
         const data = await response.json()
         setSheets(data.sheets)
@@ -55,7 +55,7 @@ export default function Dashboard() {
     
     setAddingSheet(true)
     try {
-      const response = await fetch(getApiUrl('/sheets/analyze'), {
+      const response = await fetch('http://localhost:8005/sheets/analyze', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -100,7 +100,7 @@ export default function Dashboard() {
   const handleRefreshSheet = async (sheetId: number) => {
     setRefreshingSheets(prev => new Set([...Array.from(prev), sheetId]))
     try {
-      const response = await fetch(getApiUrl(`/sheets/${sheetId}/resync`), {
+      const response = await fetch(`http://localhost:8005/sheets/${sheetId}/resync`, {
         method: 'POST',
       })
       if (response.ok) {

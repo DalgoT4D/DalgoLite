@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect, useRef } from 'react'
 import { X, Database, Link, AlertTriangle, Loader2 } from 'lucide-react'
-import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface Table {
   id: number
@@ -196,7 +195,7 @@ export default function JoinModal({
   }) => {
     try {
       // Try to fetch actual data from the backend to check for common values
-      const response = await fetch(getApiUrl(`/validate-join`), {
+      const response = await fetch(`http://localhost:8005/validate-join`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -231,8 +230,8 @@ export default function JoinModal({
       
       // Fetch data from both tables
       const [leftResponse, rightResponse] = await Promise.all([
-        fetch(getApiUrl(`/sheets/${joinConfig.leftTable}/data`)),
-        fetch(getApiUrl(`/sheets/${joinConfig.rightTable}/data`))
+        fetch(`http://localhost:8005/sheets/${joinConfig.leftTable}/data`),
+        fetch(`http://localhost:8005/sheets/${joinConfig.rightTable}/data`)
       ])
 
       if (!leftResponse.ok || !rightResponse.ok) {

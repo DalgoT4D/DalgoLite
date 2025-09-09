@@ -52,7 +52,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
 
   const logout = async () => {
     try {
-      await fetch(getApiUrl('/auth/logout'), {
+      await fetch('http://localhost:8005/auth/logout', {
         method: 'POST',
       })
       setIsAuthenticated(false)
