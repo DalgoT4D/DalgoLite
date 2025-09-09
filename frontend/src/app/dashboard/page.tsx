@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, Link2, Database, CheckCircle2, ArrowRight, RefreshCw, Eye, Trash2, AlertCircle } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
+import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 import DashboardLayout from '@/components/DashboardLayout'
 
 interface ConnectedSheet {
