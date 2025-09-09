@@ -40,6 +40,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Health check endpoint (public)
+@app.get("/health")
+async def health_check():
+    """Public health check endpoint"""
+    from datetime import datetime
+    return {
+        "status": "healthy",
+        "service": "DalgoLite API",
+        "version": "1.0.0",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "port": 8053
+    }
+
 # Google OAuth Configuration
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets.readonly',
