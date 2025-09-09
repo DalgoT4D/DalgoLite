@@ -122,7 +122,7 @@ export default function ChatWidget({ chartId, sheetId, projectId, context, onCha
         project_id: projectId
       }
 
-      const response = await fetch('http://localhost:8000/chat', {
+      const response = await fetch('http://localhost:8005/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

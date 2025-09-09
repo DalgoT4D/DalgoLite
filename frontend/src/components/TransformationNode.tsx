@@ -414,12 +414,12 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
           
           {/* Execute Button - Only show for non-source nodes and when not running */}
           <div className="flex items-center gap-1">
-            {onExecute && step.status !== 'running' && (
+            {onExecute && (step.status as any) !== 'running' && (
               <button
                 onClick={handleExecute}
-                disabled={step.status === 'running'}
+                disabled={(step.status as any) === 'running'}
                 className={`flex items-center gap-1 px-3 py-1.5 rounded text-xs font-medium transition-colors ${
-                  step.status === 'running'
+                  (step.status as any) === 'running'
                     ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                     : 'bg-green-600 hover:bg-green-700 text-white'
                 }`}
