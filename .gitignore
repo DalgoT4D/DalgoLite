@@ -8,6 +8,7 @@
 *.pdf
 *.db
 *.txt
+*.pyc
 
 logs/
 frontend/node_modules/

@@ -4283,6 +4283,181 @@ async def chat_with_data(request: ChatRequest, db: Session = Depends(get_db)):
         else:
             raise HTTPException(status_code=500, detail=f"Chat service error: {error_message}")
 
+# ============================================
+# AI-Powered Chart Analysis Chat Endpoints
+# ============================================
+
+from services.ai_factory import AIServiceFactory
+from services.chart_context import ChartContextService
+from models.chat_models import ChatRequest, ChatResponse, DefaultQuestionsRequest, DefaultQuestionsResponse, DefaultQuestion
+
+@app.post("/chat/analyze-chart", response_model=ChatResponse)
+async def analyze_chart_with_ai(request: ChatRequest, db: Session = Depends(get_db)):
+    """Analyze chart data using AI"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Initialize services
+        ai_service = AIServiceFactory.create_service()
+        chart_context_service = ChartContextService(db)
+        
+        # If chart_id is provided, get chart context
+        chart_data_used = False
+        charts_referenced = []
+        
+        if request.chart_id:
+            try:
+                chart_context = await chart_context_service.get_chart_context(request.chart_id)
+                charts_referenced = [request.chart_id]
+                chart_data_used = True
+                
+                # Format messages for AI analysis
+                messages = ai_service.format_chart_analysis_prompt(
+                    chart_data=chart_context,
+                    user_question=request.message,
+                    context=request.context
+                )
+                
+            except ValueError as e:
+                # Chart not found, proceed with general question
+                chart_context = {}
+                messages = [
+                    {"role": "system", "content": "You are a data analyst AI assistant. The user asked about a chart that couldn't be found. Please provide general guidance."},
+                    {"role": "user", "content": request.message}
+                ]
+                
+        else:
+            # General question without specific chart context
+            messages = [
+                {"role": "system", "content": f"You are a data analyst AI assistant. You are helping a user on the {request.context.get('page', 'charts')} page of a data analytics application."},
+                {"role": "user", "content": request.message}
+            ]
+        
+        # Get AI response
+        ai_response = await ai_service.chat_completion(messages)
+        
+        # Generate follow-up questions if chart data was used
+        follow_up_questions = []
+        if chart_data_used and request.chart_id:
+            try:
+                default_questions = chart_context_service.get_default_questions(chart_context)
+                follow_up_questions = [q["text"] for q in default_questions[:3]]  # First 3 questions
+            except:
+                follow_up_questions = [
+                    "What other insights can you provide?",
+                    "Are there any patterns I should be aware of?",
+                    "How can I improve this visualization?"
+                ]
+        
+        return ChatResponse(
+            response=ai_response.content,
+            chart_data_used=chart_data_used,
+            follow_up_questions=follow_up_questions,
+            charts_referenced=charts_referenced,
+            provider_used=ai_service.get_provider_name(),
+            model_used=ai_response.model
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_message = str(e)
+        if "LLM_API_KEY" in error_message or "api_key" in error_message.lower():
+            raise HTTPException(status_code=500, detail="AI service not configured. Please check API credentials.")
+        else:
+            raise HTTPException(status_code=500, detail=f"Chat analysis error: {error_message}")
+
+@app.get("/chat/default-questions", response_model=DefaultQuestionsResponse)
+async def get_default_questions(
+    context: str = "charts",
+    chart_ids: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Get context-aware default questions for the chat interface"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        chart_context_service = ChartContextService(db)
+        all_questions = []
+        
+        # Parse chart IDs if provided
+        parsed_chart_ids = []
+        if chart_ids:
+            try:
+                parsed_chart_ids = [int(id.strip()) for id in chart_ids.split(',') if id.strip()]
+            except ValueError:
+                parsed_chart_ids = []
+        
+        # Get questions for specific charts
+        if parsed_chart_ids:
+            for chart_id in parsed_chart_ids[:3]:  # Limit to first 3 charts
+                try:
+                    chart_context = await chart_context_service.get_chart_context(chart_id)
+                    questions = chart_context_service.get_default_questions(chart_context)
+                    all_questions.extend(questions[:2])  # First 2 questions per chart
+                except:
+                    continue
+        
+        # Add general questions if no chart-specific questions or as fallback
+        if not all_questions:
+            general_questions = [
+                DefaultQuestion(
+                    text="What insights can you provide about my charts?",
+                    category="general",
+                    chart_specific=False
+                ),
+                DefaultQuestion(
+                    text="How can I improve my data visualizations?",
+                    category="recommendations",
+                    chart_specific=False
+                ),
+                DefaultQuestion(
+                    text="What patterns do you see in my data?",
+                    category="patterns",
+                    chart_specific=False
+                ),
+                DefaultQuestion(
+                    text="Are there any data quality issues I should address?",
+                    category="quality",
+                    chart_specific=False
+                ),
+                DefaultQuestion(
+                    text="What additional charts would help my analysis?",
+                    category="suggestions",
+                    chart_specific=False
+                )
+            ]
+            all_questions.extend([q.__dict__ for q in general_questions])
+        
+        # Convert to response format and limit total questions
+        response_questions = []
+        for q in all_questions[:8]:  # Limit to 8 total questions
+            if isinstance(q, dict):
+                response_questions.append(DefaultQuestion(**q))
+            else:
+                response_questions.append(q)
+        
+        return DefaultQuestionsResponse(questions=response_questions)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting default questions: {str(e)}")
+
+@app.get("/chat/providers")
+async def get_ai_providers():
+    """Get available AI providers and their models"""
+    try:
+        return {
+            "current_provider": os.getenv('LLM_PROVIDER', 'openai'),
+            "available_providers": AIServiceFactory.get_available_providers(),
+            "default_models": AIServiceFactory.get_default_models()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting AI providers: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8053)
