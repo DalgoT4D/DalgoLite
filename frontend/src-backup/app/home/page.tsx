@@ -25,7 +25,6 @@ import {
 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import DashboardLayout from '@/components/DashboardLayout'
-import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface ConnectedSheet {
   id: number
@@ -94,12 +93,12 @@ export default function HomePage() {
       setLoading(true)
       
       // Fetch sheets
-      const sheetsResponse = await fetch(getApiUrl('/sheets/connected'))
+      const sheetsResponse = await fetch('http://localhost:8005/sheets/connected')
       const sheetsData = sheetsResponse.ok ? await sheetsResponse.json() : { sheets: [] }
       setSheets(sheetsData.sheets)
       
       // Fetch transformation projects
-      const projectsResponse = await fetch(getApiUrl('/projects'))
+      const projectsResponse = await fetch('http://localhost:8005/projects')
       const projectsData = projectsResponse.ok ? await projectsResponse.json() : { projects: [] }
       setProjects(projectsData.projects)
       
@@ -131,7 +130,7 @@ export default function HomePage() {
       // Fetch sheet charts
       for (const sheet of sheets) {
         try {
-          const chartsResponse = await fetch(getApiUrl(`/sheets/${sheet.id}/charts`))
+          const chartsResponse = await fetch(`http://localhost:8005/sheets/${sheet.id}/charts`)
           if (chartsResponse.ok) {
             const chartsData = await chartsResponse.json()
             allCharts.push(...chartsData.charts.map((chart: any) => ({ ...chart, sheet_id: sheet.id })))
@@ -144,7 +143,7 @@ export default function HomePage() {
       // Fetch project charts  
       for (const project of projects) {
         try {
-          const chartsResponse = await fetch(getApiUrl(`/projects/${project.id}/charts`))
+          const chartsResponse = await fetch(`http://localhost:8005/projects/${project.id}/charts`)
           if (chartsResponse.ok) {
             const chartsData = await chartsResponse.json()
             allCharts.push(...chartsData.charts.map((chart: any) => ({ ...chart, project_id: project.id })))
@@ -164,7 +163,7 @@ export default function HomePage() {
     try {
       const sheetCharts = await Promise.all(
         sheets.map(async (sheet: ConnectedSheet) => {
-          const chartsResponse = await fetch(getApiUrl(`/sheets/${sheet.id}/charts`))
+          const chartsResponse = await fetch(`http://localhost:8005/sheets/${sheet.id}/charts`)
           if (chartsResponse.ok) {
             const chartsData = await chartsResponse.json()
             return chartsData.charts.length
@@ -175,7 +174,7 @@ export default function HomePage() {
 
       const projectCharts = await Promise.all(
         projects.map(async (project: any) => {
-          const chartsResponse = await fetch(getApiUrl(`/projects/${project.id}/charts`))
+          const chartsResponse = await fetch(`http://localhost:8005/projects/${project.id}/charts`)
           if (chartsResponse.ok) {
             const chartsData = await chartsResponse.json()
             return chartsData.charts.length
@@ -207,7 +206,7 @@ export default function HomePage() {
     setRefreshingSheets(prev => new Set([...Array.from(prev), sheet.id]))
     
     try {
-      const response = await fetch(getApiUrl(`/sheets/${sheet.id}/resync`), {
+      const response = await fetch(`http://localhost:8005/sheets/${sheet.id}/resync`, {
         method: 'POST',
       })
       
@@ -232,7 +231,7 @@ export default function HomePage() {
     setDeletingSheets(prev => new Set([...Array.from(prev), sheet.id]))
     
     try {
-      const response = await fetch(getApiUrl(`/sheets/${sheet.id}`), {
+      const response = await fetch(`http://localhost:8005/sheets/${sheet.id}`, {
         method: 'DELETE',
       })
       
@@ -264,7 +263,7 @@ export default function HomePage() {
     setDeletingProjects(prev => new Set([...Array.from(prev), project.id]))
     
     try {
-      const response = await fetch(getApiUrl(`/projects/${project.id}`), {
+      const response = await fetch(`http://localhost:8005/projects/${project.id}`, {
         method: 'DELETE',
       })
       
@@ -299,7 +298,7 @@ export default function HomePage() {
     setRunningProjects(prev => new Set([...Array.from(prev), project.id]))
     
     try {
-      const response = await fetch(getApiUrl(`/projects/${project.id}/execute-all`), {
+      const response = await fetch(`http://localhost:8005/projects/${project.id}/execute-all`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

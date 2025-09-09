@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react'
 import { ChevronDown, Database, FileText, Layers, Loader2 } from 'lucide-react'
-import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface DataSource {
   id: string
@@ -47,11 +46,11 @@ export default function DataSourceSelector({
         // Fetch project-specific data sources
         
         // 1. Get original sheets connected to project
-        const projectResponse = await fetch(getApiUrl(`/projects/${projectId}`))
+        const projectResponse = await fetch(`http://localhost:8005/projects/${projectId}`)
         if (projectResponse.ok) {
           const project = await projectResponse.json()
           
-          const sheetsResponse = await fetch(getApiUrl('/sheets/connected')))
+          const sheetsResponse = await fetch('http://localhost:8005/sheets/connected')
           if (sheetsResponse.ok) {
             const sheetsData = await sheetsResponse.json()
             const projectSheets = sheetsData.sheets.filter((sheet: any) => 
@@ -73,7 +72,7 @@ export default function DataSourceSelector({
           }
 
           // 2. Get transformation tables
-          const transformsResponse = await fetch(getApiUrl(`/projects/${projectId}/ai-transformations`))
+          const transformsResponse = await fetch(`http://localhost:8005/projects/${projectId}/ai-transformations`)
           if (transformsResponse.ok) {
             const transformsData = await transformsResponse.json()
             const completedSteps = transformsData.steps.filter((step: any) => 
@@ -107,7 +106,7 @@ export default function DataSourceSelector({
           }
 
           // 3. Get completed joins for this project
-          const joinsResponse = await fetch(getApiUrl(`/projects/${projectId}/joins`))
+          const joinsResponse = await fetch(`http://localhost:8005/projects/${projectId}/joins`)
           if (joinsResponse.ok) {
             const joinsData = await joinsResponse.json()
             console.log('DataSourceSelector: Raw joins data:', joinsData)
@@ -146,7 +145,7 @@ export default function DataSourceSelector({
           // 4. Add project combined data option if there are transformations
           if (sources.some(s => s.type === 'transformation')) {
             try {
-              const projectDataResponse = await fetch(getApiUrl(`/projects/${projectId}/data-sources`))
+              const projectDataResponse = await fetch(`http://localhost:8005/projects/${projectId}/data-sources`)
               if (projectDataResponse.ok) {
                 const projectDataSources = await projectDataResponse.json()
                 
@@ -178,7 +177,7 @@ export default function DataSourceSelector({
         }
       } else {
         // Fetch all available sheets for global chart creation
-        const sheetsResponse = await fetch(getApiUrl('/sheets/connected'))
+        const sheetsResponse = await fetch('http://localhost:8005/sheets/connected')
         if (sheetsResponse.ok) {
           const sheetsData = await sheetsResponse.json()
           

@@ -7,7 +7,6 @@ import { useAuth } from '@/contexts/AuthContext'
 import DashboardLayout from '@/components/DashboardLayout'
 import TransformCanvas from '@/components/TransformCanvas'
 import AutomationPanel from '@/components/AutomationPanel'
-import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface ConnectedSheet {
   id: number
@@ -74,7 +73,7 @@ export default function ProjectCanvasPage() {
       setLoading(true)
       
       // Fetch project details
-      const projectResponse = await fetch(getApiUrl(`/projects/${projectId}`))
+      const projectResponse = await fetch(`http://localhost:8005/projects/${projectId}`)
       if (!projectResponse.ok) {
         throw new Error('Project not found')
       }
@@ -82,7 +81,7 @@ export default function ProjectCanvasPage() {
       setProject(projectData)
 
       // Fetch project sheets
-      const sheetsResponse = await fetch(getApiUrl(`/sheets/connected`))
+      const sheetsResponse = await fetch(`http://localhost:8005/sheets/connected`)
       if (sheetsResponse.ok) {
         const allSheets = await sheetsResponse.json()
         // Filter sheets that belong to this project
@@ -93,14 +92,14 @@ export default function ProjectCanvasPage() {
       }
 
       // Fetch transformation steps
-      const stepsResponse = await fetch(getApiUrl(`/projects/${projectId}/ai-transformations`))
+      const stepsResponse = await fetch(`http://localhost:8005/projects/${projectId}/ai-transformations`)
       if (stepsResponse.ok) {
         const stepsData = await stepsResponse.json()
         setTransformationSteps(stepsData.steps)
       }
 
       // Fetch joins  
-      const joinsResponse = await fetch(getApiUrl(`/projects/${projectId}/joins`))
+      const joinsResponse = await fetch(`http://localhost:8005/projects/${projectId}/joins`)
       if (joinsResponse.ok) {
         const joinsData = await joinsResponse.json()
         setJoins(joinsData.joins || [])
@@ -123,7 +122,7 @@ export default function ProjectCanvasPage() {
     canvas_position: { x: number; y: number }
   }) => {
     try {
-      const response = await fetch(getApiUrl(`/projects/${projectId}/ai-transformations`), {
+      const response = await fetch(`http://localhost:8005/projects/${projectId}/ai-transformations`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -149,7 +148,7 @@ export default function ProjectCanvasPage() {
 
   const handleUpdateTransformationStep = async (stepId: number, updates: any) => {
     try {
-      const response = await fetch(getApiUrl(`/ai-transformations/${stepId}`), {
+      const response = await fetch(`http://localhost:8005/ai-transformations/${stepId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -169,7 +168,7 @@ export default function ProjectCanvasPage() {
       }
 
       // Only refresh transformation steps for meaningful changes
-      const stepsResponse = await fetch(getApiUrl(`/projects/${projectId}/ai-transformations`))
+      const stepsResponse = await fetch(`http://localhost:8005/projects/${projectId}/ai-transformations`)
       if (stepsResponse.ok) {
         const stepsData = await stepsResponse.json()
         setTransformationSteps(stepsData.steps)
@@ -182,7 +181,7 @@ export default function ProjectCanvasPage() {
 
   const handleExecuteStep = async (stepId: number) => {
     try {
-      const response = await fetch(getApiUrl(`/ai-transformations/${stepId}/execute`), {
+      const response = await fetch(`http://localhost:8005/ai-transformations/${stepId}/execute`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -195,7 +194,7 @@ export default function ProjectCanvasPage() {
       }
 
       // Only refresh transformation steps, not entire project data
-      const stepsResponse = await fetch(getApiUrl(`/projects/${projectId}/ai-transformations`))
+      const stepsResponse = await fetch(`http://localhost:8005/projects/${projectId}/ai-transformations`)
       if (stepsResponse.ok) {
         const stepsData = await stepsResponse.json()
         setTransformationSteps(stepsData.steps)
@@ -208,7 +207,7 @@ export default function ProjectCanvasPage() {
 
   const handleExecuteAll = async () => {
     try {
-      const response = await fetch(getApiUrl(`/projects/${projectId}/execute-all`), {
+      const response = await fetch(`http://localhost:8005/projects/${projectId}/execute-all`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -235,7 +234,7 @@ export default function ProjectCanvasPage() {
 
   const handleDeleteTransformationStep = async (stepId: number) => {
     try {
-      const response = await fetch(getApiUrl(`/ai-transformations/${stepId}`), {
+      const response = await fetch(`http://localhost:8005/ai-transformations/${stepId}`, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
@@ -248,7 +247,7 @@ export default function ProjectCanvasPage() {
       }
 
       // Refresh transformation steps
-      const stepsResponse = await fetch(getApiUrl(`/projects/${projectId}/ai-transformations`))
+      const stepsResponse = await fetch(`http://localhost:8005/projects/${projectId}/ai-transformations`)
       if (stepsResponse.ok) {
         const stepsData = await stepsResponse.json()
         setTransformationSteps(stepsData.steps)

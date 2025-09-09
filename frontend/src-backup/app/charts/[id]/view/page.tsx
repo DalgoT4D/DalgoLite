@@ -6,7 +6,6 @@ import { ArrowLeft, Download, Edit2, Settings, BarChart3 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import Navigation from '@/components/Navigation'
 import ChartRenderer, { ChartRendererRef } from '@/components/ChartRenderer'
-import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface Chart {
   id: number
@@ -59,7 +58,7 @@ export default function ChartViewPage({ params }: { params: { id: string } }) {
       setLoading(true)
       
       // Fetch chart metadata
-      const chartResponse = await fetch(getApiUrl(`/charts/${params.id}`))
+      const chartResponse = await fetch(`http://localhost:8005/charts/${params.id}`)
       if (!chartResponse.ok) {
         setError('Chart not found')
         return
@@ -68,7 +67,7 @@ export default function ChartViewPage({ params }: { params: { id: string } }) {
       setChart(chartInfo)
 
       // Fetch chart data for rendering
-      const dataResponse = await fetch(getApiUrl(`/charts/${params.id}/data`))
+      const dataResponse = await fetch(`http://localhost:8005/charts/${params.id}/data`)
       if (!dataResponse.ok) {
         setError('Failed to load chart data')
         return

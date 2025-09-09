@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react'
 import { X, Download, Search, ChevronLeft, ChevronRight, Eye, FileText, Layers, Database } from 'lucide-react'
-import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface DataViewerProps {
   isOpen: boolean
@@ -69,15 +68,15 @@ export default function DataViewer({
       switch (sourceType) {
         case 'sheet':
           const sheetId = sourceId.replace('sheet-', '')
-          url = getApiUrl(`/sheets/${sheetId}/data`)
+          url = `http://localhost:8005/sheets/${sheetId}/data`
           break
         case 'transformation':
           const stepId = sourceId.replace('transform-', '')
-          url = getApiUrl(`/ai-transformations/${stepId}/data`)
+          url = `http://localhost:8005/ai-transformations/${stepId}/data`
           break
         case 'project':
           const projectId = sourceId.replace('project-', '')
-          url = getApiUrl(`/projects/${projectId}/data`)
+          url = `http://localhost:8005/projects/${projectId}/data`
           break
         case 'join':
           const joinId = sourceId.replace('join-', '')
@@ -87,7 +86,7 @@ export default function DataViewer({
           const projectIdMatch = currentUrl.match(/\/transform\/(\d+)\/canvas/)
           if (projectIdMatch) {
             const currentProjectId = projectIdMatch[1]
-            url = getApiUrl(`/projects/${currentProjectId}/joins/${joinId}/data`)
+            url = `http://localhost:8005/projects/${currentProjectId}/joins/${joinId}/data`
           } else {
             throw new Error('Cannot determine project ID for join data')
           }
