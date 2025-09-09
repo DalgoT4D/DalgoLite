@@ -12,7 +12,7 @@ cleanup() {
 trap cleanup SIGINT
 
 # Start backend server
-echo "Starting Python backend on port 8005..."
+echo "Starting Python backend on port 8053..."
 cd backend
 source venv/bin/activate
 python main.py &
@@ -20,15 +20,15 @@ BACKEND_PID=$!
 cd ..
 
 # Start frontend server  
-echo "Starting Next.js frontend on port 3005..."
+echo "Starting Next.js frontend on port 3053..."
 cd frontend
 npm run dev &
 FRONTEND_PID=$!
 cd ..
 
 echo "DalgoLite is running!"
-echo "Frontend: http://localhost:3005"
-echo "Backend API: http://localhost:8005"
+echo "Frontend: http://localhost:3053"
+echo "Backend API: http://localhost:8053"
 echo ""
 echo "Press Ctrl+C to stop both servers"
 
