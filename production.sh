@@ -28,9 +28,9 @@ else
     echo "✅ Virtual environment activated"
     
     # Start backend with uvicorn in background
-    uvicorn main:app --host 0.0.0.0 --port 8005 > ../logs/backend-prod.log 2>&1 &
+    uvicorn main:app --host 0.0.0.0 --port 8053 > ../logs/backend-prod.log 2>&1 &
     BACKEND_PID=$!
-    echo "✅ Backend started on PID $BACKEND_PID (port 8005)"
+    echo "✅ Backend started on PID $BACKEND_PID (port 8053)"
     cd ..
 fi
 
@@ -49,7 +49,7 @@ else
     echo "🎨 Starting production frontend server..."
     npm run start > ../logs/frontend-prod.log 2>&1 &
     FRONTEND_PID=$!
-    echo "✅ Frontend started on PID $FRONTEND_PID (port 3005)"
+    echo "✅ Frontend started on PID $FRONTEND_PID (port 3053)"
     cd ..
 fi
 
@@ -59,9 +59,9 @@ echo $FRONTEND_PID > logs/frontend-prod.pid
 
 echo ""
 echo "🎉 DalgoLite Production Environment is running!"
-echo "🌐 Frontend: http://localhost:3005"
-echo "🔧 Backend API: http://localhost:8005"
-echo "📋 API Docs: http://localhost:8005/docs"
+echo "🌐 Frontend: http://localhost:3053"
+echo "🔧 Backend API: http://localhost:8053"
+echo "📋 API Docs: http://localhost:8053/docs"
 echo ""
 echo "📊 View logs:"
 echo "   Backend: tail -f logs/backend-prod.log"
