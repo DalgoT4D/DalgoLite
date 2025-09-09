@@ -249,7 +249,7 @@ async def auth_callback(code: str, state: str = None):
         
         
         # Redirect back to frontend
-        return RedirectResponse(url="http://localhost:3000?connected=true")
+        return RedirectResponse(url="http://localhost:3053?connected=true")
         
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -4302,14 +4302,34 @@ async def analyze_chart_with_ai(request: ChatRequest, db: Session = Depends(get_
         ai_service = AIServiceFactory.create_service()
         chart_context_service = ChartContextService(db)
         
-        # If chart_id is provided, get chart context
+        # Check if user is asking about a specific chart by name (if no chart_id provided)
+        detected_chart_id = request.chart_id
+        if not detected_chart_id:
+            # Try to detect chart name in the message
+            try:
+                # Get all available charts to match against
+                all_charts = chart_context_service.chart_repo.get_all_charts() 
+                for chart in all_charts:
+                    chart_name_lower = chart.chart_name.lower()
+                    message_lower = request.message.lower()
+                    
+                    # Check if chart name is mentioned in the message
+                    if (chart_name_lower in message_lower or 
+                        f"'{chart_name_lower}'" in message_lower or
+                        f'"{chart_name_lower}"' in message_lower):
+                        detected_chart_id = chart.id
+                        break
+            except:
+                pass
+        
+        # If chart_id is provided or detected, get chart context
         chart_data_used = False
         charts_referenced = []
         
-        if request.chart_id:
+        if detected_chart_id:
             try:
-                chart_context = await chart_context_service.get_chart_context(request.chart_id)
-                charts_referenced = [request.chart_id]
+                chart_context = await chart_context_service.get_chart_context(detected_chart_id)
+                charts_referenced = [detected_chart_id]
                 chart_data_used = True
                 
                 # Format messages for AI analysis
@@ -4328,9 +4348,34 @@ async def analyze_chart_with_ai(request: ChatRequest, db: Session = Depends(get_
                 ]
                 
         else:
-            # General question without specific chart context
+            # General question without specific chart context - check if they need data exploration help
+            message_lower = request.message.lower()
+            
+            if any(keyword in message_lower for keyword in ['data source', 'data available', 'explore data', 'connected sheets']):
+                # User is asking about data sources - provide helpful data exploration
+                try:
+                    # Get available data sources from database
+                    sheet_repo = SheetRepository(db)
+                    connected_sheets = sheet_repo.get_all_sheets()
+                    
+                    data_sources_info = []
+                    for sheet in connected_sheets[:5]:  # Limit to first 5
+                        ds_info = f"- {sheet.sheet_name} (Google Sheet, connected {sheet.connected_at.strftime('%Y-%m-%d') if sheet.connected_at else 'recently'})"
+                        data_sources_info.append(ds_info)
+                    
+                    system_content = f"""You are a data analyst AI assistant helping a user explore their data sources for visualization.
+
+Available Data Sources:
+{chr(10).join(data_sources_info) if data_sources_info else 'No data sources connected yet. Suggest connecting Google Sheets first.'}
+
+Help the user understand what data they have available and suggest appropriate chart types they could create."""
+                except:
+                    system_content = "You are a data analyst AI assistant. Help the user explore their data and create meaningful visualizations."
+            else:
+                system_content = f"You are a data analyst AI assistant. You are helping a user on the {request.context.get('page', 'charts')} page of a data analytics application."
+            
             messages = [
-                {"role": "system", "content": f"You are a data analyst AI assistant. You are helping a user on the {request.context.get('page', 'charts')} page of a data analytics application."},
+                {"role": "system", "content": system_content},
                 {"role": "user", "content": request.message}
             ]
         
@@ -4400,35 +4445,66 @@ async def get_default_questions(
                 except:
                     continue
         
-        # Add general questions if no chart-specific questions or as fallback
+        # Add context-aware general questions
         if not all_questions:
-            general_questions = [
-                DefaultQuestion(
-                    text="What insights can you provide about my charts?",
-                    category="general",
-                    chart_specific=False
-                ),
-                DefaultQuestion(
-                    text="How can I improve my data visualizations?",
-                    category="recommendations",
-                    chart_specific=False
-                ),
-                DefaultQuestion(
-                    text="What patterns do you see in my data?",
-                    category="patterns",
-                    chart_specific=False
-                ),
-                DefaultQuestion(
-                    text="Are there any data quality issues I should address?",
-                    category="quality",
-                    chart_specific=False
-                ),
-                DefaultQuestion(
-                    text="What additional charts would help my analysis?",
-                    category="suggestions",
-                    chart_specific=False
-                )
-            ]
+            if not parsed_chart_ids or len(parsed_chart_ids) == 0:
+                # EMPTY STATE: No charts - focus on data exploration and getting started
+                general_questions = [
+                    DefaultQuestion(
+                        text="What data sources do I have available to explore?",
+                        category="exploration",
+                        chart_specific=False
+                    ),
+                    DefaultQuestion(
+                        text="Help me analyze my data before creating charts",
+                        category="analysis",
+                        chart_specific=False
+                    ),
+                    DefaultQuestion(
+                        text="What types of visualizations work best for my data?",
+                        category="recommendations",
+                        chart_specific=False
+                    ),
+                    DefaultQuestion(
+                        text="Suggest chart ideas based on my connected sheets",
+                        category="suggestions",
+                        chart_specific=False
+                    ),
+                    DefaultQuestion(
+                        text="Walk me through creating my first chart",
+                        category="guidance",
+                        chart_specific=False
+                    )
+                ]
+            else:
+                # HAS CHARTS: General analysis questions
+                general_questions = [
+                    DefaultQuestion(
+                        text="Compare insights across all my charts",
+                        category="comparison",
+                        chart_specific=False
+                    ),
+                    DefaultQuestion(
+                        text="What story do my charts tell together?",
+                        category="narrative",
+                        chart_specific=False
+                    ),
+                    DefaultQuestion(
+                        text="How can I improve my data visualizations?",
+                        category="recommendations",
+                        chart_specific=False
+                    ),
+                    DefaultQuestion(
+                        text="Identify patterns across my data",
+                        category="patterns",
+                        chart_specific=False
+                    ),
+                    DefaultQuestion(
+                        text="What additional charts would enhance my analysis?",
+                        category="suggestions",
+                        chart_specific=False
+                    )
+                ]
             all_questions.extend([q.__dict__ for q in general_questions])
         
         # Convert to response format and limit total questions

@@ -72,7 +72,7 @@ export const useChat = () => {
     setIsLoading(true)
 
     try {
-      const response = await fetch('http://localhost:8000/chat/analyze-chart', {
+      const response = await fetch('http://localhost:8053/chat/analyze-chart', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -116,7 +116,7 @@ export const useChat = () => {
   const loadDefaultQuestions = useCallback(async (chartIds: number[] = []) => {
     try {
       const chartIdsParam = chartIds.length > 0 ? `?chart_ids=${chartIds.join(',')}` : ''
-      const response = await fetch(`http://localhost:8000/chat/default-questions${chartIdsParam}`, {
+      const response = await fetch(`http://localhost:8053/chat/default-questions${chartIdsParam}`, {
         credentials: 'include'
       })
       

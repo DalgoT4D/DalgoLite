@@ -412,6 +412,9 @@ class ChartRepository:
     def get_chart_by_id(self, chart_id: int) -> Optional[SavedChart]:
         return self.db.query(SavedChart).filter(SavedChart.id == chart_id).first()
     
+    def get_all_charts(self) -> List[SavedChart]:
+        return self.db.query(SavedChart).order_by(SavedChart.created_at.desc()).all()
+    
     def update_chart(self, chart_id: int, chart_name: str = None, chart_type: str = None,
                     x_axis_column: str = None, y_axis_column: str = None, 
                     chart_config: Dict[str, Any] = None) -> Optional[SavedChart]:
