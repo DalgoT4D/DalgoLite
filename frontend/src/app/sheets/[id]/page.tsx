@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { ArrowLeft, RefreshCw, ExternalLink, BarChart3, Plus, Eye, Trash2, Settings } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import Navigation from '@/components/Navigation'
+import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface Sheet {
   id: number
@@ -47,7 +48,7 @@ export default function SheetDetailsPage({ params }: { params: { id: string } })
   const fetchSheetData = async () => {
     try {
       // Fetch sheet details
-      const sheetResponse = await fetch(`http://localhost:8000/sheets/${params.id}`)
+      const sheetResponse = await fetch(getApiUrl(`/sheets/${params.id}`))
       if (!sheetResponse.ok) {
         router.push('/home')
         return
@@ -56,7 +57,7 @@ export default function SheetDetailsPage({ params }: { params: { id: string } })
       setSheet(sheetData)
 
       // Fetch charts for this sheet
-      const chartsResponse = await fetch(`http://localhost:8000/sheets/${params.id}/charts`)
+      const chartsResponse = await fetch(getApiUrl(`/sheets/${params.id}/charts`))
       if (chartsResponse.ok) {
         const chartsData = await chartsResponse.json()
         setCharts(chartsData.charts)
@@ -73,7 +74,7 @@ export default function SheetDetailsPage({ params }: { params: { id: string } })
     
     setRefreshing(true)
     try {
-      const response = await fetch(`http://localhost:8000/sheets/${sheet.id}/resync`, {
+      const response = await fetch(getApiUrl(`/sheets/${sheet.id}/resync`), {
         method: 'POST',
       })
       

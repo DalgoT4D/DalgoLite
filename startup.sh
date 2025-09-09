@@ -16,7 +16,7 @@ else
     cd backend
     source venv/bin/activate && python main.py > ../logs/backend.log 2>&1 &
     BACKEND_PID=$!
-    echo "✅ Backend started on PID $BACKEND_PID (port 8000)"
+    echo "✅ Backend started on PID $BACKEND_PID (port 8053)"
     cd ..
 fi
 
@@ -27,7 +27,7 @@ else
     cd frontend
     npm run dev > ../logs/frontend.log 2>&1 &
     FRONTEND_PID=$!
-    echo "✅ Frontend started on PID $FRONTEND_PID (port 3000)"
+    echo "✅ Frontend started on PID $FRONTEND_PID (port 3053)"
     cd ..
 fi
 
@@ -37,9 +37,9 @@ echo $FRONTEND_PID > logs/frontend.pid
 
 echo ""
 echo "🎉 DalgoLite is now running!"
-echo "🌐 Frontend: http://localhost:3000"
-echo "🔧 Backend API: http://localhost:8000"
-echo "📋 API Docs: http://localhost:8000/docs"
+echo "🌐 Frontend: http://localhost:3053"
+echo "🔧 Backend API: http://localhost:8053"
+echo "📋 API Docs: http://localhost:8053/docs"
 echo ""
 echo "📊 View logs:"
 echo "   Backend: tail -f logs/backend.log"

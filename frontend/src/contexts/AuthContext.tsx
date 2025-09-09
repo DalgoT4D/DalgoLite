@@ -1,6 +1,7 @@
 'use client'
 
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface AuthContextType {
   isAuthenticated: boolean
@@ -31,7 +32,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const checkAuthStatus = async () => {
     try {
       // Try to fetch connected sheets to check if user is authenticated
-      const response = await fetch('http://localhost:8000/sheets/connected')
+      const response = await fetch(getApiUrl(API_ENDPOINTS.SHEETS_CONNECTED))
       if (response.ok) {
         setIsAuthenticated(true)
       } else {
@@ -46,12 +47,12 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   }
 
   const login = () => {
-    window.location.href = 'http://localhost:8000/auth/google'
+    window.location.href = getApiUrl('/auth/google')
   }
 
   const logout = async () => {
     try {
-      await fetch('http://localhost:8000/auth/logout', {
+      await fetch(getApiUrl('/auth/logout'), {
         method: 'POST',
       })
       setIsAuthenticated(false)

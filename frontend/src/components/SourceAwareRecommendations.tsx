@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react'
 import { Plus, RefreshCw, Filter, FileText, Layers, Database } from 'lucide-react'
+import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface DataSource {
   id: string
@@ -61,21 +62,21 @@ export default function SourceAwareRecommendations({
           if (source.type === 'sheet') {
             const sheetIdFromSource = source.id.replace('sheet-', '')
             console.log(`SourceAwareRecommendations: Fetching sheet recommendations for ID: ${sheetIdFromSource}`)
-            response = await fetch(`http://localhost:8000/sheets/${sheetIdFromSource}/recommendations`)
+            response = await fetch(getApiUrl(`/sheets/${sheetIdFromSource}/recommendations`))
           } else if (source.type === 'transformation') {
             // Check if this is a join or AI transformation
             if (source.id.startsWith('join-')) {
               const joinId = source.id.replace('join-', '')
               console.log(`SourceAwareRecommendations: Fetching join recommendations for ID: ${joinId}`)
-              response = await fetch(`http://localhost:8000/joins/${joinId}/recommendations`)
+              response = await fetch(getApiUrl(`/joins/${joinId}/recommendations`))
             } else {
               const stepId = source.id.replace('transform-', '')
               console.log(`SourceAwareRecommendations: Fetching AI transformation recommendations for ID: ${stepId}`)
-              response = await fetch(`http://localhost:8000/ai-transformations/${stepId}/recommendations`)
+              response = await fetch(getApiUrl(`/ai-transformations/${stepId}/recommendations`))
             }
           } else if (source.type === 'project' && projectId) {
             console.log(`SourceAwareRecommendations: Fetching project recommendations for ID: ${projectId}`)
-            response = await fetch(`http://localhost:8000/projects/${projectId}/recommendations`)
+            response = await fetch(getApiUrl(`/projects/${projectId}/recommendations`))
           }
 
           if (response?.ok) {

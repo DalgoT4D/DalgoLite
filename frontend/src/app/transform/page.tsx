@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { ArrowLeft, Plus, Database, Zap, Users, Eye, Calendar, Play, CheckCircle } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import DashboardLayout from '@/components/DashboardLayout'
+import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface ConnectedSheet {
   id: number
@@ -49,14 +50,14 @@ export default function TransformPage() {
       setLoading(true)
       
       // Fetch connected sheets
-      const sheetsResponse = await fetch('http://localhost:8000/sheets/connected')
+      const sheetsResponse = await fetch(getApiUrl('/sheets/connected'))
       if (sheetsResponse.ok) {
         const sheetsData = await sheetsResponse.json()
         setSheets(sheetsData.sheets || [])
       }
 
       // Fetch transformation projects
-      const projectsResponse = await fetch('http://localhost:8000/projects')
+      const projectsResponse = await fetch(getApiUrl('/projects'))
       if (projectsResponse.ok) {
         const projectsData = await projectsResponse.json()
         setProjects(projectsData.projects || [])
@@ -74,7 +75,7 @@ export default function TransformPage() {
     
     try {
       setCreating(true)
-      const response = await fetch('http://localhost:8000/projects', {
+      const response = await fetch(getApiUrl('/projects'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

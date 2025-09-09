@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, Link2, Database, CheckCircle2, ArrowRight, RefreshCw, Eye, Trash2, AlertCircle } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
+import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 import DashboardLayout from '@/components/DashboardLayout'
 
 interface ConnectedSheet {
@@ -37,7 +38,7 @@ export default function Dashboard() {
   const fetchConnectedSheets = async () => {
     try {
       setLoading(true)
-      const response = await fetch('http://localhost:8000/sheets/connected')
+      const response = await fetch(getApiUrl('/sheets/connected'))
       if (response.ok) {
         const data = await response.json()
         setSheets(data.sheets)
@@ -54,7 +55,7 @@ export default function Dashboard() {
     
     setAddingSheet(true)
     try {
-      const response = await fetch('http://localhost:8000/sheets/analyze', {
+      const response = await fetch(getApiUrl('/sheets/analyze'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -97,9 +98,9 @@ export default function Dashboard() {
   }
 
   const handleRefreshSheet = async (sheetId: number) => {
-    setRefreshingSheets(prev => new Set([...prev, sheetId]))
+    setRefreshingSheets(prev => new Set([...Array.from(prev), sheetId]))
     try {
-      const response = await fetch(`http://localhost:8000/sheets/${sheetId}/resync`, {
+      const response = await fetch(getApiUrl(`/sheets/${sheetId}/resync`), {
         method: 'POST',
       })
       if (response.ok) {

@@ -34,11 +34,24 @@ app = FastAPI(title="DalgoLite API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3053", "https://dalgolite.dalgo.org"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Health check endpoint (public)
+@app.get("/health")
+async def health_check():
+    """Public health check endpoint"""
+    from datetime import datetime
+    return {
+        "status": "healthy",
+        "service": "DalgoLite API",
+        "version": "1.0.0",
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "port": 8053
+    }
 
 # Google OAuth Configuration
 SCOPES = [
@@ -4447,4 +4460,4 @@ async def get_ai_providers():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8053)

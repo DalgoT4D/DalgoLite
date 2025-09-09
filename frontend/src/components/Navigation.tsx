@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { Menu, X, Home, BarChart3, Database, LogOut, User, Zap } from 'lucide-react'
 import Logo from './Logo'
+import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface NavigationProps {
   isAuthenticated: boolean
@@ -24,7 +25,7 @@ export default function Navigation({ isAuthenticated, onLogout }: NavigationProp
 
   const handleLogout = async () => {
     try {
-      const response = await fetch('http://localhost:8000/auth/logout', {
+      const response = await fetch(getApiUrl('/auth/logout'), {
         method: 'POST',
       })
       

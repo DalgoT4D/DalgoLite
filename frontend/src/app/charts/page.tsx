@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import DashboardLayout from '@/components/DashboardLayout'
 import ChartRenderer from '@/components/ChartRenderer'
 import ChatBot from '@/components/chat/ChatBot'
+import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface ChartDisplayProps {
   chartId: number
@@ -21,7 +22,7 @@ function ChartDisplay({ chartId }: ChartDisplayProps) {
   useEffect(() => {
     const fetchChartData = async () => {
       try {
-        const response = await fetch(`http://localhost:8000/charts/${chartId}/data`)
+        const response = await fetch(getApiUrl(`/charts/${chartId}/data`))
         if (response.ok) {
           const data = await response.json()
           setChartData(data)
@@ -196,7 +197,7 @@ export default function UnifiedChartsPage() {
 
   const fetchCharts = async () => {
     try {
-      const response = await fetch('http://localhost:8000/charts')
+      const response = await fetch(getApiUrl('/charts'))
       if (response.ok) {
         const data = await response.json()
         setCharts(data.charts)
@@ -210,7 +211,7 @@ export default function UnifiedChartsPage() {
 
   const fetchDataSources = async () => {
     try {
-      const response = await fetch('http://localhost:8000/data-sources')
+      const response = await fetch(getApiUrl('/data-sources'))
       if (response.ok) {
         const data = await response.json()
         setDataSources(data.data_sources)
@@ -229,14 +230,14 @@ export default function UnifiedChartsPage() {
       
       if (source.type === 'sheet') {
         const sheetId = source.id.replace('sheet-', '')
-        endpoint = `http://localhost:8000/sheets/${sheetId}/recommendations`
+        endpoint = getApiUrl(`/sheets/${sheetId}/recommendations`)
       } else if (source.type === 'transformation') {
         if (source.id.startsWith('join-')) {
           const joinId = source.id.replace('join-', '')
-          endpoint = `http://localhost:8000/joins/${joinId}/recommendations`
+          endpoint = getApiUrl(`/joins/${joinId}/recommendations`)
         } else {
           const stepId = source.id.replace('transform-', '')
-          endpoint = `http://localhost:8000/ai-transformations/${stepId}/recommendations`
+          endpoint = getApiUrl(`/ai-transformations/${stepId}/recommendations`)
         }
       } else if (source.type === 'join') {
         // For joins, we might need to create a generic recommendation endpoint
@@ -300,7 +301,7 @@ export default function UnifiedChartsPage() {
         // No project_id needed - unified charts are project-agnostic!
       }
 
-      const response = await fetch('http://localhost:8000/charts/unified', {
+      const response = await fetch(getApiUrl('/charts/unified'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -344,7 +345,7 @@ export default function UnifiedChartsPage() {
         }
       }
 
-      const response = await fetch(`http://localhost:8000/charts/${editingChart.id}`, {
+      const response = await fetch(getApiUrl(`/charts/${editingChart.id}`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -371,7 +372,7 @@ export default function UnifiedChartsPage() {
     if (!confirm('Are you sure you want to delete this chart?')) return
 
     try {
-      const response = await fetch(`http://localhost:8000/charts/${chartId}`, {
+      const response = await fetch(getApiUrl(`/charts/${chartId}`), {
         method: 'DELETE',
       })
 

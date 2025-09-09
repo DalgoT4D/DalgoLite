@@ -4,7 +4,8 @@ import { useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useSidebar } from '@/contexts/SidebarContext'
 import Logo from './Logo'
-import { 
+import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
+import {
   Home, 
   BarChart3, 
   Database, 
@@ -36,7 +37,7 @@ export default function Sidebar({ isAuthenticated, onLogout }: SidebarProps) {
 
   const handleLogout = async () => {
     try {
-      const response = await fetch('http://localhost:8000/auth/logout', {
+      const response = await fetch(getApiUrl('/auth/logout'), {
         method: 'POST',
       })
       
