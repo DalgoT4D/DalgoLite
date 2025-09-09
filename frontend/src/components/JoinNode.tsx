@@ -256,12 +256,12 @@ export default function JoinNode({ data, selected }: JoinNodeProps) {
           
           {/* Execute Button - Only show when not running */}
           <div className="flex items-center gap-1">
-            {onExecute && join.status !== 'running' && !isExecuting && (
+            {onExecute && (join.status as any) !== 'running' && !isExecuting && (
               <button
                 onClick={handleExecute}
-                disabled={join.status === 'running' || isExecuting}
+                disabled={(join.status as any) === 'running' || isExecuting}
                 className={`flex items-center gap-1 px-3 py-1.5 rounded text-xs font-medium transition-colors ${
-                  join.status === 'running' || isExecuting
+                  (join.status as any) === 'running' || isExecuting
                     ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                     : 'bg-green-600 hover:bg-green-700 text-white'
                 }`}

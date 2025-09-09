@@ -24,7 +24,7 @@ export default function Navigation({ isAuthenticated, onLogout }: NavigationProp
 
   const handleLogout = async () => {
     try {
-      const response = await fetch('http://localhost:8000/auth/logout', {
+      const response = await fetch('http://localhost:8005/auth/logout', {
         method: 'POST',
       })
       

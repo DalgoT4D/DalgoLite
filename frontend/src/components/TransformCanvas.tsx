@@ -173,7 +173,7 @@ export default function TransformCanvas({
         targetHandle: edge.targetHandle
       }))
 
-      const response = await fetch(`http://localhost:8000/projects/${projectId}/canvas-layout`, {
+      const response = await fetch(`http://localhost:8005/projects/${projectId}/canvas-layout`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -236,7 +236,7 @@ export default function TransformCanvas({
       // Load canvas layout inline to avoid dependency issues
       let savedLayout = null
       try {
-        const response = await fetch(`http://localhost:8000/projects/${projectId}`)
+        const response = await fetch(`http://localhost:8005/projects/${projectId}`)
         if (response.ok) {
           const project = await response.json()
           if (project.canvas_layout) {
@@ -311,7 +311,7 @@ export default function TransformCanvas({
 
       // Add join nodes
       try {
-        const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
+        const joinsResponse = await fetch(`http://localhost:8005/projects/${projectId}/joins`)
         if (joinsResponse.ok) {
           const joinsData = await joinsResponse.json()
           
@@ -376,7 +376,7 @@ export default function TransformCanvas({
                     const leftTableId = leftTableType === 'transformation' ? joinConfig.leftTable - 10000 : joinConfig.leftTable
                     const rightTableId = rightTableType === 'transformation' ? joinConfig.rightTable - 10000 : joinConfig.rightTable
                     
-                    const response = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}`, {
+                    const response = await fetch(`http://localhost:8005/projects/${projectId}/joins/${joinId}`, {
                       method: 'PUT',
                       headers: {
                         'Content-Type': 'application/json',
@@ -397,7 +397,7 @@ export default function TransformCanvas({
                     
                     if (response.ok) {
                       // Refresh the join nodes by refetching project data
-                      const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
+                      const joinsResponse = await fetch(`http://localhost:8005/projects/${projectId}/joins`)
                       if (joinsResponse.ok) {
                         const joinsData = await joinsResponse.json()
                         // The useEffect will handle updating the nodes
@@ -420,7 +420,7 @@ export default function TransformCanvas({
                 onDelete: async (joinId: number) => {
                   if (window.confirm('Are you sure you want to delete this join? This action cannot be undone.')) {
                     try {
-                      const deleteResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}`, {
+                      const deleteResponse = await fetch(`http://localhost:8005/projects/${projectId}/joins/${joinId}`, {
                         method: 'DELETE',
                       })
                       
@@ -454,7 +454,7 @@ export default function TransformCanvas({
                       return node
                     }))
 
-                    const executeResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}/execute`, {
+                    const executeResponse = await fetch(`http://localhost:8005/projects/${projectId}/joins/${joinId}/execute`, {
                       method: 'POST',
                     })
                     
@@ -483,7 +483,7 @@ export default function TransformCanvas({
                       
                       // Fetch the updated join data to get the error message
                       try {
-                        const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
+                        const joinsResponse = await fetch(`http://localhost:8005/projects/${projectId}/joins`)
                         if (joinsResponse.ok) {
                           const joinsData = await joinsResponse.json()
                           const failedJoin = joinsData.joins.find((j: any) => j.id === joinId)
@@ -892,7 +892,7 @@ export default function TransformCanvas({
       const rightTableId = rightTableType === 'transformation' ? joinConfig.rightTable - 10000 : joinConfig.rightTable
       
       // Create join via backend API
-      const response = await fetch(`http://localhost:8000/projects/${projectId}/joins`, {
+      const response = await fetch(`http://localhost:8005/projects/${projectId}/joins`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -962,7 +962,7 @@ export default function TransformCanvas({
               const leftTableId = leftTableType === 'transformation' ? joinConfig.leftTable - 10000 : joinConfig.leftTable
               const rightTableId = rightTableType === 'transformation' ? joinConfig.rightTable - 10000 : joinConfig.rightTable
               
-              const response = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}`, {
+              const response = await fetch(`http://localhost:8005/projects/${projectId}/joins/${joinId}`, {
                 method: 'PUT',
                 headers: {
                   'Content-Type': 'application/json',
@@ -983,7 +983,7 @@ export default function TransformCanvas({
               
               if (response.ok) {
                 // Refresh the join nodes by refetching project data
-                const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
+                const joinsResponse = await fetch(`http://localhost:8005/projects/${projectId}/joins`)
                 if (joinsResponse.ok) {
                   const joinsData = await joinsResponse.json()
                   // The useEffect will handle updating the nodes
@@ -1006,7 +1006,7 @@ export default function TransformCanvas({
           onDelete: async (joinId: number) => {
             if (window.confirm('Are you sure you want to delete this join? This action cannot be undone.')) {
               try {
-                const deleteResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}`, {
+                const deleteResponse = await fetch(`http://localhost:8005/projects/${projectId}/joins/${joinId}`, {
                   method: 'DELETE',
                 })
                 
@@ -1040,7 +1040,7 @@ export default function TransformCanvas({
                 return node
               }))
 
-              const executeResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins/${joinId}/execute`, {
+              const executeResponse = await fetch(`http://localhost:8005/projects/${projectId}/joins/${joinId}/execute`, {
                 method: 'POST',
               })
               

@@ -115,8 +115,6 @@ export default function AutomationPanel({ projectId, projectName }: AutomationPa
           nextRun.setMonth(nextRun.getMonth() + 1)
         }
         break
-      case 'manual':
-        return null
     }
     
     return nextRun
@@ -330,8 +328,8 @@ export default function AutomationPanel({ projectId, projectName }: AutomationPa
                             {new Date(run.timestamp).toLocaleDateString()} at {new Date(run.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </p>
                           <p className="text-sm text-gray-600">
-                            {run.status === 'success' && `✓ ${run.stepsProcessed} steps completed in ${formatDuration(run.duration!)}`}
-                            {run.status === 'failed' && `✗ Failed after ${formatDuration(run.duration!)} (${run.stepsProcessed}/${run.stepsProcessed + (run.errors?.length || 0)} steps)`}
+                            {run.status === 'success' && `✓ ${run.stepsProcessed || 0} steps completed in ${formatDuration(run.duration!)}`}
+                            {run.status === 'failed' && `✗ Failed after ${formatDuration(run.duration!)} (${run.stepsProcessed || 0}/${(run.stepsProcessed || 0) + (run.errors?.length || 0)} steps)`}
                           </p>
                         </div>
                       </div>

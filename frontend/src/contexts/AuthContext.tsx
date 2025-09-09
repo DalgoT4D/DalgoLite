@@ -31,7 +31,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const checkAuthStatus = async () => {
     try {
       // Try to fetch connected sheets to check if user is authenticated
-      const response = await fetch('http://localhost:8000/sheets/connected')
+      const response = await fetch('http://localhost:8005/sheets/connected')
       if (response.ok) {
         setIsAuthenticated(true)
       } else {
@@ -46,12 +46,12 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   }
 
   const login = () => {
-    window.location.href = 'http://localhost:8000/auth/google'
+    window.location.href = 'http://localhost:8005/auth/google'
   }
 
   const logout = async () => {
     try {
-      await fetch('http://localhost:8000/auth/logout', {
+      await fetch('http://localhost:8005/auth/logout', {
         method: 'POST',
       })
       setIsAuthenticated(false)

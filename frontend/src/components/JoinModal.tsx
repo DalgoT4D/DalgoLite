@@ -195,7 +195,7 @@ export default function JoinModal({
   }) => {
     try {
       // Try to fetch actual data from the backend to check for common values
-      const response = await fetch(`http://localhost:8000/validate-join`, {
+      const response = await fetch(`http://localhost:8005/validate-join`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -230,8 +230,8 @@ export default function JoinModal({
       
       // Fetch data from both tables
       const [leftResponse, rightResponse] = await Promise.all([
-        fetch(`http://localhost:8000/sheets/${joinConfig.leftTable}/data`),
-        fetch(`http://localhost:8000/sheets/${joinConfig.rightTable}/data`)
+        fetch(`http://localhost:8005/sheets/${joinConfig.leftTable}/data`),
+        fetch(`http://localhost:8005/sheets/${joinConfig.rightTable}/data`)
       ])
 
       if (!leftResponse.ok || !rightResponse.ok) {
@@ -272,20 +272,20 @@ export default function JoinModal({
         // Extract values from both columns
         const leftValues = new Set(
           leftColumnData
-            .map(row => row[leftColIndex])
-            .filter(val => val !== null && val !== undefined && val !== '')
-            .map(val => String(val).trim().toLowerCase())
+            .map((row: any) => row[leftColIndex])
+            .filter((val: any) => val !== null && val !== undefined && val !== '')
+            .map((val: any) => String(val).trim().toLowerCase())
         )
 
         const rightValues = new Set(
           rightColumnData
-            .map(row => row[rightColIndex])
-            .filter(val => val !== null && val !== undefined && val !== '')
-            .map(val => String(val).trim().toLowerCase())
+            .map((row: any) => row[rightColIndex])
+            .filter((val: any) => val !== null && val !== undefined && val !== '')
+            .map((val: any) => String(val).trim().toLowerCase())
         )
 
         // Check for common values
-        const commonValues = [...leftValues].filter(val => rightValues.has(val))
+        const commonValues = [...Array.from(leftValues)].filter(val => rightValues.has(val))
         
         console.log(`Checking join: ${joinKey.left} (${leftValues.size} unique values) vs ${joinKey.right} (${rightValues.size} unique values)`)
         console.log(`Common values found: ${commonValues.length}`, commonValues.slice(0, 5))

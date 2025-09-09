@@ -13,6 +13,8 @@ interface DataSource {
     transformation_step?: string
     project_name?: string
     sheet_name?: string
+    join_id?: number
+    output_table_name?: string
   }
 }
 
@@ -44,11 +46,11 @@ export default function DataSourceSelector({
         // Fetch project-specific data sources
         
         // 1. Get original sheets connected to project
-        const projectResponse = await fetch(`http://localhost:8000/projects/${projectId}`)
+        const projectResponse = await fetch(`http://localhost:8005/projects/${projectId}`)
         if (projectResponse.ok) {
           const project = await projectResponse.json()
           
-          const sheetsResponse = await fetch('http://localhost:8000/sheets/connected')
+          const sheetsResponse = await fetch('http://localhost:8005/sheets/connected')
           if (sheetsResponse.ok) {
             const sheetsData = await sheetsResponse.json()
             const projectSheets = sheetsData.sheets.filter((sheet: any) => 
@@ -70,7 +72,7 @@ export default function DataSourceSelector({
           }
 
           // 2. Get transformation tables
-          const transformsResponse = await fetch(`http://localhost:8000/projects/${projectId}/ai-transformations`)
+          const transformsResponse = await fetch(`http://localhost:8005/projects/${projectId}/ai-transformations`)
           if (transformsResponse.ok) {
             const transformsData = await transformsResponse.json()
             const completedSteps = transformsData.steps.filter((step: any) => 
@@ -104,7 +106,7 @@ export default function DataSourceSelector({
           }
 
           // 3. Get completed joins for this project
-          const joinsResponse = await fetch(`http://localhost:8000/projects/${projectId}/joins`)
+          const joinsResponse = await fetch(`http://localhost:8005/projects/${projectId}/joins`)
           if (joinsResponse.ok) {
             const joinsData = await joinsResponse.json()
             console.log('DataSourceSelector: Raw joins data:', joinsData)
@@ -122,9 +124,9 @@ export default function DataSourceSelector({
                 alert(`DEBUG: ${join.name} has ${outputColumns.length} columns. First 3: ${outputColumns.slice(0, 3).join(', ')}`)
               }
               
-              const sourceData = {
+              const sourceData: DataSource = {
                 id: `join-${join.id}`,
-                type: 'transformation', // Use 'transformation' type for consistency with chart creation
+                type: 'transformation' as const, // Use 'transformation' type for consistency with chart creation
                 name: `${join.name} (Join)`,
                 columns: outputColumns,
                 metadata: {
@@ -143,7 +145,7 @@ export default function DataSourceSelector({
           // 4. Add project combined data option if there are transformations
           if (sources.some(s => s.type === 'transformation')) {
             try {
-              const projectDataResponse = await fetch(`http://localhost:8000/projects/${projectId}/data-sources`)
+              const projectDataResponse = await fetch(`http://localhost:8005/projects/${projectId}/data-sources`)
               if (projectDataResponse.ok) {
                 const projectDataSources = await projectDataResponse.json()
                 
@@ -175,7 +177,7 @@ export default function DataSourceSelector({
         }
       } else {
         // Fetch all available sheets for global chart creation
-        const sheetsResponse = await fetch('http://localhost:8000/sheets/connected')
+        const sheetsResponse = await fetch('http://localhost:8005/sheets/connected')
         if (sheetsResponse.ok) {
           const sheetsData = await sheetsResponse.json()
           
