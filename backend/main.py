@@ -40,6 +40,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3053')
+
 # Health check endpoint (public)
 @app.get("/health")
 async def health_check():
@@ -249,7 +251,7 @@ async def auth_callback(code: str, state: str = None):
         
         
         # Redirect back to frontend
-        return RedirectResponse(url="http://localhost:3053?connected=true")
+        return RedirectResponse(url=f"{FRONTEND_URL}?connected=true")
         
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
