@@ -1,7 +1,8 @@
 .DS_Store
 
 .env
-.env.example
+.env.local
+.env.production
 
 *.log
 *.md
