@@ -8,31 +8,50 @@ import Logo from '@/components/Logo'
 import GoogleSignInButton from '@/components/GoogleSignInButton'
 
 export default function LandingPage() {
-  const { isAuthenticated, isLoading, login, checkAuthStatus } = useAuth()
+  const { isAuthenticated, isLoading, isFirstLogin, user, login, checkAuthStatus } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
     // Check if user just connected (redirected from OAuth)
     const urlParams = new URLSearchParams(window.location.search)
     if (urlParams.get('connected') === 'true') {
-      // Clean up URL and redirect to home after a moment
+      // Clean up URL and refresh auth status
       window.history.replaceState({}, document.title, '/')
-      checkAuthStatus() // Refresh auth status
-      setTimeout(() => {
-        router.push('/home')
-      }, 2000)
-    } else if (isAuthenticated && !isLoading) {
-      // If already authenticated, redirect to home
-      router.push('/home')
+      checkAuthStatus()
+      // Fallback redirect in case state update is delayed
+      const t = setTimeout(() => {
+        if (isFirstLogin) router.push('/onboarding')
+        else router.push('/home')
+      }, 1500)
+      return () => clearTimeout(t)
     }
-  }, [router, checkAuthStatus, isAuthenticated, isLoading])
+  }, [checkAuthStatus, isFirstLogin, router])
+
+  useEffect(() => {
+    if (!isLoading && isAuthenticated) {
+      console.log('DEBUG: Landing page routing decision:', {
+        isAuthenticated,
+        isFirstLogin,
+        isLoading,
+        user: user
+      })
+      if (isFirstLogin) {
+        console.log('DEBUG: Routing to /onboarding (first login)')
+        router.push('/onboarding')
+      } else {
+        console.log('DEBUG: Routing to /home (returning user)')
+        router.push('/home')
+      }
+    }
+  }, [router, isAuthenticated, isFirstLogin, isLoading, user])
 
   const handleConnect = () => {
     login()
   }
 
-  const handleGoToHome = () => {
-    router.push('/home')
+  const handlePrimaryCta = () => {
+    if (isFirstLogin) router.push('/onboarding')
+    else router.push('/home')
   }
 
   if (isLoading) {
@@ -63,10 +82,10 @@ export default function LandingPage() {
                       <span className="font-medium">Connected</span>
                     </div>
                     <button
-                      onClick={handleGoToHome}
+                      onClick={handlePrimaryCta}
                       className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
                     >
-                      Go to Home
+                      {isFirstLogin ? 'Continue Onboarding' : 'Go to Home'}
                     </button>
                   </div>
                 ) : (
@@ -108,21 +127,21 @@ export default function LandingPage() {
                 </div>
               </div>
             ) : (
-              <div className="bg-white/80 backdrop-blur-md rounded-2xl p-8 shadow-xl max-w-md mx-auto mb-12">
+              <div className="bg_white/80 backdrop-blur-md rounded-2xl p-8 shadow-xl max-w-md mx-auto mb-12">
                 <div className="text-center">
-                  <div className="bg-green-100 rounded-full p-4 w-16 h-16 mx-auto mb-4">
+                  <div className="bg-green-100 rounded-full p-4 w-16 h-16 mx_auto mb-4">
                     <CheckCircle className="text-green-600" size={32} />
                   </div>
                   <h3 className="text-xl font-semibold text-gray-900 mb-3">Ready to Analyze!</h3>
                   <p className="text-gray-600 mb-6">
-                    You're connected and ready to start creating amazing visualizations from your data.
+                    {isFirstLogin ? "You're connected! Let's complete a quick onboarding to tailor your experience." : "You're connected and ready to start creating amazing visualizations from your data."}
                   </p>
                   <button
-                    onClick={handleGoToHome}
+                    onClick={handlePrimaryCta}
                     className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors flex items-center justify-center gap-2"
                   >
                     <ArrowRight size={20} />
-                    Go to Home
+                    {isFirstLogin ? 'Start Onboarding' : 'Go to Home'}
                   </button>
                 </div>
               </div>
@@ -330,11 +349,11 @@ export default function LandingPage() {
           
           {isAuthenticated && (
             <button 
-              onClick={handleGoToHome}
+              onClick={handlePrimaryCta}
               className="bg-white text-blue-600 hover:bg-gray-50 font-semibold py-4 px-8 rounded-lg text-lg inline-flex items-center gap-2 transition-colors"
             >
               <ArrowRight size={24} />
-              Continue to Home
+              {isFirstLogin ? 'Start Onboarding' : 'Continue to Home'}
             </button>
           )}
         </div>

@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
-import { ArrowLeft, ArrowRight, Database, CheckCircle, Users, Zap } from 'lucide-react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { ArrowLeft, ArrowRight, Database, CheckCircle, Users, Zap, Target, Sparkles } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import Navigation from '@/components/Navigation'
 
@@ -31,20 +31,27 @@ interface JoinSuggestion {
 export default function TransformPage() {
   const { isAuthenticated, logout } = useAuth()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [step, setStep] = useState(1)
   const [sheets, setSheets] = useState<ConnectedSheet[]>([])
   const [selectedSheets, setSelectedSheets] = useState<number[]>([])
   const [joinSuggestions, setJoinSuggestions] = useState<JoinSuggestion[]>([])
   const [loading, setLoading] = useState(true)
   const [projectName, setProjectName] = useState('')
+  const [isOnboarding, setIsOnboarding] = useState(false)
 
   useEffect(() => {
     if (!isAuthenticated) {
       router.push('/')
       return
     }
+    
+    // Check if this is an onboarding session
+    const onboardingParam = searchParams?.get('onboarding')
+    setIsOnboarding(onboardingParam === 'true')
+    
     fetchSheets()
-  }, [isAuthenticated, router])
+  }, [isAuthenticated, router, searchParams])
 
   const fetchSheets = async () => {
     try {
@@ -105,9 +112,15 @@ export default function TransformPage() {
       
       if (response.ok) {
         const data = await response.json()
-        // Show success message and redirect to project page
-        alert(`Project "${data.name}" created successfully!`)
-        router.push(`/transform/${data.id}`)
+        // Show success message and redirect based on onboarding status
+        if (isOnboarding) {
+          // In onboarding, go to charts page next
+          router.push(`/charts?onboarding=true&project=${data.id}`)
+        } else {
+          // Normal flow, go to project page
+          alert(`Project "${data.name}" created successfully!`)
+          router.push(`/transform/${data.id}`)
+        }
       } else {
         const errorData = await response.json()
         alert(`Error creating project: ${errorData.detail}`)
@@ -131,21 +144,66 @@ export default function TransformPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation isAuthenticated={isAuthenticated} onLogout={logout} />
+
+      {/* Onboarding Progress Bar */}
+      {isOnboarding && (
+        <div className="bg-blue-600 text-white py-2">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-sm font-bold">1</div>
+                  <span className="text-sm text-blue-200">Connect Data</span>
+                </div>
+                <ArrowRight size={16} />
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 bg-white text-blue-600 rounded-full flex items-center justify-center text-sm font-bold">2</div>
+                  <span className="text-sm font-medium">Transform</span>
+                </div>
+                <ArrowRight size={16} />
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-sm font-bold">3</div>
+                  <span className="text-sm text-blue-200">Visualize</span>
+                </div>
+              </div>
+              <div className="text-sm text-blue-200">Step 2 of 3</div>
+            </div>
+          </div>
+        </div>
+      )}
       
       <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="text-center mb-8">
-          <button
-            onClick={() => router.push('/home')}
-            className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 font-medium mb-4"
-          >
-            <ArrowLeft size={20} />
-            Back to Dashboard
-          </button>
-          <h1 className="text-3xl font-bold text-gray-900 mb-4">Transform Multiple Sheets</h1>
-          <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-            Combine and clean your data from multiple Google Sheets to create powerful visualizations
-          </p>
+          {!isOnboarding && (
+            <button
+              onClick={() => router.push('/home')}
+              className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-700 font-medium mb-4"
+            >
+              <ArrowLeft size={20} />
+              Back to Dashboard
+            </button>
+          )}
+          {isOnboarding ? (
+            <>
+              <div className="flex justify-center mb-4">
+                <div className="bg-blue-100 rounded-full p-3">
+                  <Target className="text-blue-600" size={32} />
+                </div>
+              </div>
+              <h1 className="text-3xl font-bold text-gray-900 mb-2">Step 2: Transform Your Data</h1>
+              <p className="text-lg text-gray-600 max-w-2xl mx-auto">
+                Now let's combine and transform your data to create powerful insights
+              </p>
+            </>
+          ) : (
+            <>
+              <h1 className="text-3xl font-bold text-gray-900 mb-4">Transform Multiple Sheets</h1>
+              <p className="text-lg text-gray-600 max-w-2xl mx-auto">
+                Combine and clean your data from multiple Google Sheets to create powerful visualizations
+              </p>
+            </>
+          )}
         </div>
 
         {/* Step Indicator */}
@@ -178,13 +236,46 @@ export default function TransformPage() {
             
             {sheets.length < 2 ? (
               <div className="text-center py-8">
-                <p className="text-gray-600">You need at least 2 connected sheets to use transformations.</p>
-                <button
-                  onClick={() => router.push('/dashboard')}
-                  className="mt-4 bg-blue-600 text-white px-6 py-2 rounded-lg"
-                >
-                  Connect More Sheets
-                </button>
+                {isOnboarding ? (
+                  <>
+                    <div className="bg-blue-50 rounded-lg p-6 mb-6">
+                      <div className="flex items-center justify-center mb-4">
+                        <Sparkles className="text-blue-600" size={32} />
+                      </div>
+                      <h3 className="text-lg font-semibold text-blue-900 mb-2">Great! You've connected your first sheet</h3>
+                      <p className="text-blue-800 mb-4">
+                        To demonstrate data transformation, you'll need at least 2 sheets. 
+                        For now, let's skip to creating visualizations with your current data.
+                      </p>
+                      <button
+                        onClick={() => router.push('/charts?onboarding=true')}
+                        className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-semibold inline-flex items-center gap-2"
+                      >
+                        <ArrowRight size={20} />
+                        Skip to Visualizations
+                      </button>
+                    </div>
+                    <p className="text-gray-600 text-sm">
+                      Or connect another sheet to see transformations in action
+                    </p>
+                    <button
+                      onClick={() => router.push('/dashboard?onboarding=true')}
+                      className="mt-4 bg-gray-100 hover:bg-gray-200 text-gray-700 px-6 py-2 rounded-lg"
+                    >
+                      Connect Another Sheet
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-gray-600">You need at least 2 connected sheets to use transformations.</p>
+                    <button
+                      onClick={() => router.push('/dashboard')}
+                      className="mt-4 bg-blue-600 text-white px-6 py-2 rounded-lg"
+                    >
+                      Connect More Sheets
+                    </button>
+                  </>
+                )}
               </div>
             ) : (
               <div className="space-y-4">

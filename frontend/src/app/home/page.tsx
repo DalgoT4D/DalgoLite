@@ -46,7 +46,7 @@ interface TransformationProject {
 }
 
 export default function HomePage() {
-  const { isAuthenticated, logout } = useAuth()
+  const { isAuthenticated, isLoading, logout } = useAuth()
   const router = useRouter()
   const [sheets, setSheets] = useState<ConnectedSheet[]>([])
   const [projects, setProjects] = useState<TransformationProject[]>([])
@@ -63,12 +63,14 @@ export default function HomePage() {
   })
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      router.push('/')
-      return
+    if (!isLoading) {
+      if (!isAuthenticated) {
+        router.push('/')
+        return
+      }
+      fetchConnectedSheets()
     }
-    fetchConnectedSheets()
-  }, [isAuthenticated, router])
+  }, [isAuthenticated, isLoading, router])
 
   const fetchConnectedSheets = async () => {
     try {
@@ -132,7 +134,7 @@ export default function HomePage() {
   }
 
   const handleRefreshSheet = async (sheet: ConnectedSheet) => {
-    setRefreshingSheets(prev => new Set([...prev, sheet.id]))
+    setRefreshingSheets(prev => new Set(Array.from(prev).concat(sheet.id)))
     
     try {
       // Call the backend to resync the sheet data
@@ -159,7 +161,7 @@ export default function HomePage() {
   }
 
   const handleDeleteSheet = async (sheet: ConnectedSheet) => {
-    setDeletingSheets(prev => new Set([...prev, sheet.id]))
+    setDeletingSheets(prev => new Set(Array.from(prev).concat(sheet.id)))
     
     try {
       const response = await fetch(`http://localhost:8000/sheets/${sheet.id}`, {
@@ -317,6 +319,13 @@ export default function HomePage() {
                 <p className="text-gray-600">Manage your individual sheets and transformation projects</p>
               </div>
               <div className="flex items-center gap-3">
+                <button
+                  onClick={() => router.push('/charts')}
+                  className="bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white px-6 py-3 rounded-xl font-semibold flex items-center gap-3 transition-all duration-200 shadow-lg hover:shadow-xl transform hover:scale-105"
+                >
+                  <BarChart3 size={22} />
+                  New Chart
+                </button>
                 {sheets.length >= 2 && (
                   <button
                     onClick={handleTransformSheets}

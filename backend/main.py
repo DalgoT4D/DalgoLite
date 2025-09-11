@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+import requests
 import os
 import json
 import re
@@ -13,7 +14,7 @@ from googleapiclient.discovery import build
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from database import create_tables, get_db, SheetRepository, ChartRepository, TransformationProjectRepository, ConnectedSheet, SavedChart, TransformationProject, TransformedDataWarehouse, PipelineExecutionHistory, engine
+from database import create_tables, get_db, SheetRepository, ChartRepository, TransformationProjectRepository, ConnectedSheet, SavedChart, TransformationProject, TransformedDataWarehouse, PipelineExecutionHistory, engine, UserRepository
 from pydantic import BaseModel
 import hashlib
 import asyncio
@@ -52,6 +53,20 @@ REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI')
 
 # In-memory storage for demo (use database in production)
 user_credentials = {}
+
+def get_current_user_id(db: Session) -> Optional[int]:
+    """Get the current user ID from stored credentials"""
+    if 'default' not in user_credentials:
+        return None
+    
+    user_sub = user_credentials['default'].get('user_sub')
+    if not user_sub:
+        return None
+    
+    # Get user ID from database
+    user_repo = UserRepository(db)
+    user = user_repo.get_by_sub(user_sub)
+    return user.id if user else None
 
 # Pydantic models for API requests
 class ChartCreateRequest(BaseModel):
@@ -139,7 +154,7 @@ async def google_auth():
     return RedirectResponse(url=authorization_url)
 
 @app.get("/auth/callback/google")
-async def auth_callback(code: str, state: str = None):
+async def auth_callback(code: str, state: str = None, request: Request = None, db: Session = Depends(get_db)):
     try:
         print(f"DEBUG: OAuth callback received code: {code[:20]}... state: {state}")
         
@@ -163,17 +178,55 @@ async def auth_callback(code: str, state: str = None):
         
         print(f"DEBUG: Got credentials, storing...")
         
-        # Store credentials (use proper session management in production)
+        # Fetch user info from Google and increment login counter FIRST
+        user_sub = None
+        try:
+            resp = requests.get(
+                "https://www.googleapis.com/oauth2/v3/userinfo",
+                headers={"Authorization": f"Bearer {credentials.token}"},
+                timeout=10,
+            )
+            userinfo = resp.json() if resp.ok else {}
+            sub = userinfo.get("sub")
+            email = userinfo.get("email")
+            name = userinfo.get("name") or userinfo.get("given_name")
+            picture = userinfo.get("picture")
+            client_ip = request.client.host if (request and request.client) else None
+            
+            print(f"DEBUG: User info retrieved - sub: {sub}, email: {email}")
+            
+            if sub:
+                repo = UserRepository(db)
+                user = repo.increment_login(
+                    google_sub=sub,
+                    email=email,
+                    name=name,
+                    picture_url=picture,
+                    last_ip=client_ip,
+                )
+                user_sub = sub
+                print(f"DEBUG: User login incremented successfully for sub: {sub}")
+                print(f"DEBUG: User login_count after increment: {user.login_count}")
+                print(f"DEBUG: User first_login_at: {user.first_login_at}")
+                print(f"DEBUG: User last_login_at: {user.last_login_at}")
+            else:
+                print("WARN: No 'sub' field in userinfo response")
+        except Exception as e:
+            print(f"WARN: userinfo/increment failed: {e}")
+        
+        # Store credentials with user_sub included
         user_credentials['default'] = {
             'token': credentials.token,
             'refresh_token': credentials.refresh_token,
             'token_uri': credentials.token_uri,
             'client_id': credentials.client_id,
             'client_secret': credentials.client_secret,
-            'scopes': credentials.scopes
+            'scopes': credentials.scopes,
+            'user_sub': user_sub  # Include user_sub in the stored credentials
         }
         
         print(f"DEBUG: Credentials stored successfully. Keys: {list(user_credentials.keys())}")
+        print(f"DEBUG: Stored user_sub: {user_sub}")
         print(f"DEBUG: Scopes: {credentials.scopes}")
         
         # Redirect back to frontend
@@ -193,31 +246,81 @@ async def logout():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/auth/status")
-async def auth_status():
+async def auth_status(db: Session = Depends(get_db)):
     """Check if user is authenticated"""
     try:
+        print(f"DEBUG: /auth/status called. user_credentials keys: {list(user_credentials.keys())}")
+        
         if 'default' not in user_credentials:
+            print("DEBUG: No 'default' credentials found")
             return {"authenticated": False}
         
-        # Optionally verify credentials are still valid
-        creds = Credentials(**user_credentials['default'])
-        if creds.expired and creds.refresh_token:
-            # Try to refresh the token
-            creds.refresh(GoogleRequest())
-            # Update stored credentials
-            user_credentials['default'] = {
-                'token': creds.token,
-                'refresh_token': creds.refresh_token,
-                'token_uri': creds.token_uri,
-                'client_id': creds.client_id,
-                'client_secret': creds.client_secret,
-                'scopes': creds.scopes
-            }
+        stored_creds = user_credentials['default']
+        print(f"DEBUG: Found stored credentials with keys: {list(stored_creds.keys())}")
         
-        return {"authenticated": True}
+        # Optionally verify credentials are still valid
+        # Filter out non-Credentials parameters like user_sub
+        creds_params = {k: v for k, v in stored_creds.items() if k != 'user_sub'}
+        creds = Credentials(**creds_params)
+        
+        # Only try to refresh if token is expired AND we have a refresh token
+        if creds.expired and creds.refresh_token:
+            print("DEBUG: Token expired, attempting refresh...")
+            try:
+                # Try to refresh the token
+                creds.refresh(GoogleRequest())
+                print("DEBUG: Token refresh successful")
+                
+                # Update stored credentials while preserving user_sub
+                user_credentials['default'] = {
+                    'token': creds.token,
+                    'refresh_token': creds.refresh_token,
+                    'token_uri': creds.token_uri,
+                    'client_id': creds.client_id,
+                    'client_secret': creds.client_secret,
+                    'scopes': creds.scopes,
+                    'user_sub': stored_creds.get('user_sub')  # Preserve user_sub
+                }
+            except Exception as refresh_error:
+                print(f"WARN: Token refresh failed: {refresh_error}")
+                # Don't clear credentials on refresh failure - user might still be valid
+                # Just log the warning and continue
+        
+        user_payload = None
+        try:
+            user_sub = stored_creds.get('user_sub')
+            print(f"DEBUG: Looking up user with sub: {user_sub}")
+            
+            if user_sub:
+                repo = UserRepository(db)
+                user = repo.get_by_sub(user_sub)
+                if user:
+                    login_count = user.login_count or 0
+                    is_first_login = login_count <= 1
+                    user_payload = {
+                        "email": user.email,
+                        "name": user.name,
+                        "picture_url": user.picture_url,
+                        "login_count": login_count,
+                        "is_first_login": is_first_login,
+                        "last_login_at": user.last_login_at.isoformat() + 'Z' if user.last_login_at else None,
+                    }
+                    print(f"DEBUG: Found user: {user.email}, login_count: {login_count}, is_first_login: {is_first_login}")
+                    print(f"DEBUG: first_login_at: {user.first_login_at}, last_login_at: {user.last_login_at}")
+                else:
+                    print(f"WARN: User with sub {user_sub} not found in database")
+            else:
+                print("WARN: No user_sub found in stored credentials")
+        except Exception as e:
+            print(f"WARN: failed loading user in /auth/status: {e}")
+
+        print(f"DEBUG: Returning authenticated: True with user_payload: {bool(user_payload)}")
+        return {"authenticated": True, "user": user_payload}
+        
     except Exception as e:
-        # If there's any error with credentials, consider user not authenticated
-        user_credentials.clear()
+        print(f"ERROR: /auth/status exception: {e}")
+        # Only clear credentials if there's a fundamental issue with the stored data
+        # Don't clear on every exception
         return {"authenticated": False}
 
 @app.get("/sheets/list")
@@ -226,7 +329,8 @@ async def list_sheets():
         if 'default' not in user_credentials:
             raise HTTPException(status_code=401, detail="Not authenticated")
         
-        creds = Credentials(**user_credentials['default'])
+        creds_params = {k: v for k, v in user_credentials['default'].items() if k != 'user_sub'}
+        creds = Credentials(**creds_params)
         service = build('sheets', 'v4', credentials=creds)
         
         # This is a simplified version - in reality you'd need to list files from Drive API
@@ -262,7 +366,8 @@ async def analyze_sheet(sheet_data: Dict[str, Any], db: Session = Depends(get_db
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         print(f"DEBUG: Found credentials, building service...")
-        creds = Credentials(**user_credentials['default'])
+        creds_params = {k: v for k, v in user_credentials['default'].items() if k != 'user_sub'}
+        creds = Credentials(**creds_params)
         service = build('sheets', 'v4', credentials=creds)
         
         # Get spreadsheet metadata for title
@@ -337,12 +442,18 @@ async def analyze_sheet(sheet_data: Dict[str, Any], db: Session = Depends(get_db
         if not values:
             raise HTTPException(status_code=400, detail="No data found in sheet")
         
+        # Get current user ID
+        current_user_id = get_current_user_id(db)
+        if not current_user_id:
+            raise HTTPException(status_code=401, detail="User not found")
+        
         # Save to database
         sheet_repo = SheetRepository(db)
         columns = values[0] if values else []
         sample_data = values[:10]  # Store first 10 rows
         
         saved_sheet = sheet_repo.create_or_update_sheet(
+            user_id=current_user_id,
             spreadsheet_id=spreadsheet_id,
             spreadsheet_url=spreadsheet_input,
             sheet_name=actual_sheet_name,
@@ -526,13 +637,18 @@ def generate_chart_recommendations(values: List[List[str]]) -> List[Dict[str, An
 # Database endpoints for sheets
 @app.get("/sheets/connected")
 async def get_connected_sheets(db: Session = Depends(get_db)):
-    """Get all connected sheets from database"""
+    """Get all connected sheets from database for the current user"""
     try:
         if 'default' not in user_credentials:
             raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get current user ID
+        current_user_id = get_current_user_id(db)
+        if not current_user_id:
+            raise HTTPException(status_code=401, detail="User not found")
             
         sheet_repo = SheetRepository(db)
-        sheets = sheet_repo.get_all_sheets()
+        sheets = sheet_repo.get_sheets_by_user(current_user_id)
         
         return {
             "sheets": [
@@ -560,8 +676,16 @@ async def get_connected_sheets(db: Session = Depends(get_db)):
 async def get_sheet_details(sheet_id: int, db: Session = Depends(get_db)):
     """Get detailed information about a specific sheet"""
     try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get current user ID
+        current_user_id = get_current_user_id(db)
+        if not current_user_id:
+            raise HTTPException(status_code=401, detail="User not found")
+        
         sheet_repo = SheetRepository(db)
-        sheet = sheet_repo.get_sheet_by_id(sheet_id)
+        sheet = sheet_repo.get_sheet_by_id_and_user(sheet_id, current_user_id)
         
         if not sheet:
             raise HTTPException(status_code=404, detail="Sheet not found")
@@ -587,14 +711,19 @@ async def get_sheet_details(sheet_id: int, db: Session = Depends(get_db)):
 async def sync_sheet(sheet_id: int, db: Session = Depends(get_db)):
     """Re-sync a sheet with Google Sheets to get latest data"""
     try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get current user ID
+        current_user_id = get_current_user_id(db)
+        if not current_user_id:
+            raise HTTPException(status_code=401, detail="User not found")
+        
         sheet_repo = SheetRepository(db)
-        sheet = sheet_repo.get_sheet_by_id(sheet_id)
+        sheet = sheet_repo.get_sheet_by_id_and_user(sheet_id, current_user_id)
         
         if not sheet:
             raise HTTPException(status_code=404, detail="Sheet not found")
-        
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
         
         # Re-analyze the sheet to get fresh data
         sheet_data = {
@@ -642,18 +771,23 @@ async def get_sheet_recommendations(sheet_id: int, db: Session = Depends(get_db)
 async def resync_sheet_data(sheet_id: int, db: Session = Depends(get_db)):
     """Resync data from Google Sheets for an existing connected sheet"""
     try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated with Google")
+        
+        # Get current user ID
+        current_user_id = get_current_user_id(db)
+        if not current_user_id:
+            raise HTTPException(status_code=401, detail="User not found")
+        
         sheet_repo = SheetRepository(db)
-        existing_sheet = sheet_repo.get_sheet_by_id(sheet_id)
+        existing_sheet = sheet_repo.get_sheet_by_id_and_user(sheet_id, current_user_id)
         
         if not existing_sheet:
             raise HTTPException(status_code=404, detail="Sheet not found")
         
-        # Check authentication
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated with Google")
-        
         # Build the service with stored credentials
-        creds = Credentials(**user_credentials['default'])
+        creds_params = {k: v for k, v in user_credentials['default'].items() if k != 'user_sub'}
+        creds = Credentials(**creds_params)
         service = build('sheets', 'v4', credentials=creds)
         
         try:
@@ -694,6 +828,7 @@ async def resync_sheet_data(sheet_id: int, db: Session = Depends(get_db)):
             sample_data = values[:10]  # Store first 10 rows
             
             updated_sheet = sheet_repo.create_or_update_sheet(
+                user_id=current_user_id,
                 spreadsheet_id=existing_sheet.spreadsheet_id,
                 spreadsheet_url=existing_sheet.spreadsheet_url,
                 title=existing_sheet.title,
@@ -729,9 +864,17 @@ async def resync_sheet_data(sheet_id: int, db: Session = Depends(get_db)):
 async def delete_sheet(sheet_id: int, db: Session = Depends(get_db)):
     """Delete a connected sheet and all its charts"""
     try:
-        # Check if sheet exists
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get current user ID
+        current_user_id = get_current_user_id(db)
+        if not current_user_id:
+            raise HTTPException(status_code=401, detail="User not found")
+        
+        # Check if sheet exists and belongs to user
         sheet_repo = SheetRepository(db)
-        sheet = sheet_repo.get_sheet_by_id(sheet_id)
+        sheet = sheet_repo.get_sheet_by_id_and_user(sheet_id, current_user_id)
         
         if not sheet:
             raise HTTPException(status_code=404, detail="Sheet not found")
@@ -767,6 +910,20 @@ async def delete_sheet(sheet_id: int, db: Session = Depends(get_db)):
 async def get_sheet_charts(sheet_id: int, db: Session = Depends(get_db)):
     """Get all charts for a specific sheet"""
     try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get current user ID
+        current_user_id = get_current_user_id(db)
+        if not current_user_id:
+            raise HTTPException(status_code=401, detail="User not found")
+        
+        # Verify sheet belongs to user
+        sheet_repo = SheetRepository(db)
+        sheet = sheet_repo.get_sheet_by_id_and_user(sheet_id, current_user_id)
+        if not sheet:
+            raise HTTPException(status_code=404, detail="Sheet not found")
+        
         chart_repo = ChartRepository(db)
         charts = chart_repo.get_charts_by_sheet(sheet_id)
         
@@ -806,6 +963,20 @@ async def get_sheet_charts(sheet_id: int, db: Session = Depends(get_db)):
 async def create_chart(chart_request: ChartCreateRequest, db: Session = Depends(get_db)):
     """Create a new chart"""
     try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get current user ID
+        current_user_id = get_current_user_id(db)
+        if not current_user_id:
+            raise HTTPException(status_code=401, detail="User not found")
+        
+        # Verify sheet belongs to user
+        sheet_repo = SheetRepository(db)
+        sheet = sheet_repo.get_sheet_by_id_and_user(chart_request.sheet_id, current_user_id)
+        if not sheet:
+            raise HTTPException(status_code=404, detail="Sheet not found")
+        
         chart_repo = ChartRepository(db)
         chart = chart_repo.create_chart(
             sheet_id=chart_request.sheet_id,
@@ -832,11 +1003,26 @@ async def create_chart(chart_request: ChartCreateRequest, db: Session = Depends(
 async def get_chart(chart_id: int, db: Session = Depends(get_db)):
     """Get a specific chart"""
     try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get current user ID
+        current_user_id = get_current_user_id(db)
+        if not current_user_id:
+            raise HTTPException(status_code=401, detail="User not found")
+        
         chart_repo = ChartRepository(db)
         chart = chart_repo.get_chart_by_id(chart_id)
         
         if not chart:
             raise HTTPException(status_code=404, detail="Chart not found")
+        
+        # Verify chart belongs to user through sheet ownership
+        if chart.sheet_id:
+            sheet_repo = SheetRepository(db)
+            sheet = sheet_repo.get_sheet_by_id_and_user(chart.sheet_id, current_user_id)
+            if not sheet:
+                raise HTTPException(status_code=404, detail="Chart not found")
         
         return {
             "id": chart.id,
@@ -858,7 +1044,27 @@ async def get_chart(chart_id: int, db: Session = Depends(get_db)):
 async def update_chart(chart_id: int, chart_request: ChartUpdateRequest, db: Session = Depends(get_db)):
     """Update an existing chart"""
     try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get current user ID
+        current_user_id = get_current_user_id(db)
+        if not current_user_id:
+            raise HTTPException(status_code=401, detail="User not found")
+        
+        # First get the chart to check ownership
         chart_repo = ChartRepository(db)
+        existing_chart = chart_repo.get_chart_by_id(chart_id)
+        if not existing_chart:
+            raise HTTPException(status_code=404, detail="Chart not found")
+        
+        # Verify chart belongs to user through sheet ownership
+        if existing_chart.sheet_id:
+            sheet_repo = SheetRepository(db)
+            sheet = sheet_repo.get_sheet_by_id_and_user(existing_chart.sheet_id, current_user_id)
+            if not sheet:
+                raise HTTPException(status_code=404, detail="Chart not found")
+        
         chart = chart_repo.update_chart(
             chart_id=chart_id,
             chart_name=chart_request.chart_name,
@@ -889,7 +1095,27 @@ async def update_chart(chart_id: int, chart_request: ChartUpdateRequest, db: Ses
 async def delete_chart(chart_id: int, db: Session = Depends(get_db)):
     """Delete a chart"""
     try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Get current user ID
+        current_user_id = get_current_user_id(db)
+        if not current_user_id:
+            raise HTTPException(status_code=401, detail="User not found")
+        
+        # First get the chart to check ownership
         chart_repo = ChartRepository(db)
+        existing_chart = chart_repo.get_chart_by_id(chart_id)
+        if not existing_chart:
+            raise HTTPException(status_code=404, detail="Chart not found")
+        
+        # Verify chart belongs to user through sheet ownership
+        if existing_chart.sheet_id:
+            sheet_repo = SheetRepository(db)
+            sheet = sheet_repo.get_sheet_by_id_and_user(existing_chart.sheet_id, current_user_id)
+            if not sheet:
+                raise HTTPException(status_code=404, detail="Chart not found")
+        
         success = chart_repo.delete_chart(chart_id)
         
         if not success:
@@ -1072,7 +1298,8 @@ async def analyze_join_opportunities(request: JoinAnalysisRequest, db: Session =
 def fetch_full_sheet_data(sheet: ConnectedSheet) -> pd.DataFrame:
     """Fetch complete data from Google Sheets for transformation"""
     try:
-        creds = Credentials(**user_credentials['default'])
+        creds_params = {k: v for k, v in user_credentials['default'].items() if k != 'user_sub'}
+        creds = Credentials(**creds_params)
         service = build('sheets', 'v4', credentials=creds)
         
         # Use the same range detection logic as analyze_sheet
@@ -1591,7 +1818,8 @@ async def sync_project_source_sheets(project: TransformationProject, sheet_repo:
         from google.oauth2.credentials import Credentials
         from googleapiclient.discovery import build
         
-        creds = Credentials(**user_credentials['default'])
+        creds_params = {k: v for k, v in user_credentials['default'].items() if k != 'user_sub'}
+        creds = Credentials(**creds_params)
         service = build('sheets', 'v4', credentials=creds)
         
         synced_count = 0

@@ -64,6 +64,7 @@ export default function ChartsPage() {
   const router = useRouter()
   const sheetId = searchParams?.get('sheet')
   const projectId = searchParams?.get('project')
+  const isOnboarding = searchParams?.get('onboarding') === 'true'
   
   const [sheet, setSheet] = useState<Sheet | null>(null)
   const [project, setProject] = useState<any>(null)
@@ -343,6 +344,15 @@ export default function ChartsPage() {
         setShowCreateChart(false)
         setSelectedSheetForCreation(null)
         resetForm()
+        
+        // Show onboarding completion if this is the first chart in onboarding
+        if (isOnboarding) {
+          // Show completion message and redirect to home
+          setTimeout(() => {
+            alert('🎉 Congratulations! You\'ve successfully created your first chart. You\'re now ready to explore all of DalgoLite\'s features!')
+            router.push('/home')
+          }, 1000)
+        }
       } else {
         const error = await response.json()
         alert(`Error creating chart: ${error.detail}`)
@@ -1441,35 +1451,104 @@ return (
   <div className="min-h-screen bg-gray-50">
     <Navigation isAuthenticated={isAuthenticated} onLogout={logout} />
 
+    {/* Onboarding Progress Bar */}
+    {isOnboarding && (
+      <div className="bg-blue-600 text-white py-2">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-sm font-bold">1</div>
+                <span className="text-sm text-blue-200">Connect Data</span>
+              </div>
+              <ArrowRight size={16} />
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-sm font-bold">2</div>
+                <span className="text-sm text-blue-200">Transform</span>
+              </div>
+              <ArrowRight size={16} />
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 bg-white text-blue-600 rounded-full flex items-center justify-center text-sm font-bold">3</div>
+                <span className="text-sm font-medium">Visualize</span>
+              </div>
+            </div>
+            <div className="text-sm text-blue-200">Step 3 of 3</div>
+          </div>
+        </div>
+      </div>
+    )}
+
     {/* Main Content */}
     <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
       <div className="mb-8">
-        <button
-          onClick={() => router.push('/home')}
-          className="inline-flex items-center gap-2 text-gray-600 hover:text-gray-700 font-medium mb-4"
-        >
-          <ArrowLeft size={20} />
-          Back to Dashboard
-        </button>
-        <h1 className="text-4xl font-bold text-gray-900 mb-2">All Charts</h1>
-        <p className="text-gray-600">View and manage all your charts organized by data source</p>
+        {!isOnboarding && (
+          <button
+            onClick={() => router.push('/home')}
+            className="inline-flex items-center gap-2 text-gray-600 hover:text-gray-700 font-medium mb-4"
+          >
+            <ArrowLeft size={20} />
+            Back to Dashboard
+          </button>
+        )}
+        {isOnboarding ? (
+          <>
+            <div className="flex justify-center mb-4">
+              <div className="bg-blue-100 rounded-full p-3">
+                <BarChart3 className="text-blue-600" size={32} />
+              </div>
+            </div>
+            <h1 className="text-4xl font-bold text-gray-900 mb-2 text-center">Step 3: Create Your First Chart</h1>
+            <p className="text-gray-600 text-center max-w-2xl mx-auto">
+              Congratulations! You've completed the setup. Now let's create beautiful visualizations from your data.
+            </p>
+          </>
+        ) : (
+          <>
+            <h1 className="text-4xl font-bold text-gray-900 mb-2">All Charts</h1>
+            <p className="text-gray-600">View and manage all your charts organized by data source</p>
+          </>
+        )}
       </div>
 
       {sheets.length === 0 ? (
         <div className="text-center py-16 bg-white rounded-lg shadow-sm border">
-          <BarChart3 className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-          <h3 className="text-xl font-medium text-gray-900 mb-2">No sheets connected yet</h3>
-          <p className="text-gray-600 mb-6">
-            Connect a Google Sheet to start creating charts and visualizations.
-          </p>
-          <button
-            onClick={() => router.push('/dashboard')}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg inline-flex items-center gap-2 transition-colors"
-          >
-            <Plus size={20} />
-            Connect Your First Sheet
-          </button>
+          {isOnboarding ? (
+            <>
+              <div className="bg-blue-50 rounded-lg p-8 mb-6">
+                <div className="flex items-center justify-center mb-4">
+                  <BarChart3 className="text-blue-600" size={48} />
+                </div>
+                <h3 className="text-xl font-semibold text-blue-900 mb-2">Almost there!</h3>
+                <p className="text-blue-800 mb-4">
+                  You need to connect a Google Sheet first to create your first chart. 
+                  Let's go back and connect your data.
+                </p>
+                <button
+                  onClick={() => router.push('/dashboard?onboarding=true')}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-semibold inline-flex items-center gap-2"
+                >
+                  <ArrowLeft size={20} />
+                  Connect Your Data
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <BarChart3 className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+              <h3 className="text-xl font-medium text-gray-900 mb-2">No sheets connected yet</h3>
+              <p className="text-gray-600 mb-6">
+                Connect a Google Sheet to start creating charts and visualizations.
+              </p>
+              <button
+                onClick={() => router.push('/dashboard')}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg inline-flex items-center gap-2 transition-colors"
+              >
+                <Plus size={20} />
+                Connect Your First Sheet
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <div className="space-y-8">

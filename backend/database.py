@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, JSON, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, JSON, ForeignKey, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
@@ -13,10 +13,29 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # Database Models
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint('google_sub', name='uq_users_google_sub'),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    google_sub = Column(String, unique=True, index=True, nullable=False)
+    email = Column(String, index=True)
+    name = Column(String)
+    picture_url = Column(String)
+    login_count = Column(Integer, default=0)
+    first_login_at = Column(DateTime, nullable=True)
+    last_login_at = Column(DateTime, nullable=True)
+    last_ip = Column(String, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
 class ConnectedSheet(Base):
     __tablename__ = "connected_sheets"
     
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     spreadsheet_id = Column(String, unique=True, index=True, nullable=False)
     spreadsheet_url = Column(String, nullable=False)
     sheet_name = Column(String, nullable=False)
@@ -28,12 +47,14 @@ class ConnectedSheet(Base):
     sample_data = Column(JSON)  # Store first few rows as JSON
     
     # Relationships
+    user = relationship("User")
     charts = relationship("SavedChart", back_populates="sheet", cascade="all, delete-orphan")
 
 class SavedChart(Base):
     __tablename__ = "saved_charts"
     
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     sheet_id = Column(Integer, ForeignKey("connected_sheets.id"), nullable=True)  # Allow null for transformed datasets  
     project_id = Column(Integer, nullable=True)  # Charts from transformed data (FK added later)
     chart_name = Column(String, nullable=False)
@@ -45,12 +66,14 @@ class SavedChart(Base):
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     
     # Relationships
+    user = relationship("User")
     sheet = relationship("ConnectedSheet", back_populates="charts")
 
 class TransformationProject(Base):
     __tablename__ = "transformation_projects"
     
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     name = Column(String, nullable=False)
     description = Column(Text)
     mode = Column(String, default='simple')  # simple, advanced, expert
@@ -65,11 +88,13 @@ class TransformationProject(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Relationships will be added later after proper FK setup
+    user = relationship("User")
 
 class TransformedDataWarehouse(Base):
     __tablename__ = "transformed_data_warehouse"
     
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     project_id = Column(Integer, ForeignKey("transformation_projects.id"), nullable=False)
     table_name = Column(String, nullable=False, unique=True)
     row_count = Column(Integer, default=0)
@@ -79,12 +104,14 @@ class TransformedDataWarehouse(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Relationships
+    user = relationship("User")
     project = relationship("TransformationProject")
 
 class DataTransformation(Base):
     __tablename__ = "data_transformations"
     
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     project_id = Column(Integer, ForeignKey("transformation_projects.id"), nullable=False)
     sheet_id = Column(Integer, ForeignKey("connected_sheets.id"), nullable=False)
     column_name = Column(String, nullable=False)
@@ -94,6 +121,7 @@ class DataTransformation(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Relationships
+    user = relationship("User")
     project = relationship("TransformationProject")
     sheet = relationship("ConnectedSheet")
 
@@ -101,6 +129,7 @@ class PipelineExecutionHistory(Base):
     __tablename__ = "pipeline_execution_history"
     
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     project_id = Column(Integer, ForeignKey("transformation_projects.id"), nullable=False)
     status = Column(String, nullable=False)  # running, completed, failed
     started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -112,6 +141,7 @@ class PipelineExecutionHistory(Base):
     duration_seconds = Column(Integer, nullable=True)
     
     # Relationships
+    user = relationship("User")
     project = relationship("TransformationProject")
 
 # Database migration utilities
@@ -121,6 +151,30 @@ def migrate_database():
     
     inspector = inspect(engine)
     existing_tables = inspector.get_table_names()
+
+    # Ensure users table exists
+    if 'users' not in existing_tables:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("""
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        google_sub TEXT NOT NULL UNIQUE,
+                        email TEXT,
+                        name TEXT,
+                        picture_url TEXT,
+                        login_count INTEGER DEFAULT 0,
+                        first_login_at DATETIME,
+                        last_login_at DATETIME,
+                        last_ip TEXT,
+                        created_at DATETIME,
+                        updated_at DATETIME
+                    )
+                """))
+                conn.commit()
+            except Exception:
+                # Fall back to metadata create_all
+                pass
     
     # Check if we need to migrate SavedChart table
     if 'saved_charts' in existing_tables:
@@ -134,6 +188,64 @@ def migrate_database():
                 conn.execute(text("ALTER TABLE saved_charts ADD COLUMN project_id INTEGER"))
                 conn.commit()
             print("Migration completed successfully")
+    
+    # Check if we need to migrate connected_sheets table to add user_id
+    if 'connected_sheets' in existing_tables:
+        existing_columns = [col['name'] for col in inspector.get_columns('connected_sheets')]
+        
+        if 'user_id' not in existing_columns:
+            print("Adding user_id column to connected_sheets table...")
+            with engine.connect() as conn:
+                # First, add the column as nullable
+                conn.execute(text("ALTER TABLE connected_sheets ADD COLUMN user_id INTEGER"))
+                conn.commit()
+                
+                # Get the first user ID to assign to existing sheets (if any users exist)
+                result = conn.execute(text("SELECT id FROM users LIMIT 1"))
+                first_user = result.fetchone()
+                
+                if first_user:
+                    # Assign all existing sheets to the first user
+                    conn.execute(text(f"UPDATE connected_sheets SET user_id = {first_user[0]} WHERE user_id IS NULL"))
+                    conn.commit()
+                    print(f"Assigned existing sheets to user {first_user[0]}")
+                else:
+                    # If no users exist, we'll need to handle this case
+                    print("WARNING: No users found. Existing sheets will have NULL user_id")
+                
+                # Make the column NOT NULL after assigning values
+                # Note: SQLite doesn't support ALTER COLUMN, so we'll recreate the table
+                print("Recreating connected_sheets table with NOT NULL constraint...")
+                conn.execute(text("""
+                    CREATE TABLE connected_sheets_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        spreadsheet_id TEXT NOT NULL UNIQUE,
+                        spreadsheet_url TEXT NOT NULL,
+                        sheet_name TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        connected_at DATETIME,
+                        last_synced DATETIME,
+                        total_rows INTEGER DEFAULT 0,
+                        columns TEXT,
+                        sample_data TEXT,
+                        FOREIGN KEY (user_id) REFERENCES users(id)
+                    )
+                """))
+                
+                # Copy data from old table
+                conn.execute(text("""
+                    INSERT INTO connected_sheets_new 
+                    SELECT id, user_id, spreadsheet_id, spreadsheet_url, sheet_name, title, 
+                           connected_at, last_synced, total_rows, columns, sample_data
+                    FROM connected_sheets
+                """))
+                
+                # Drop old table and rename new one
+                conn.execute(text("DROP TABLE connected_sheets"))
+                conn.execute(text("ALTER TABLE connected_sheets_new RENAME TO connected_sheets"))
+                conn.commit()
+                print("Migration completed successfully")
     
     # Check if we need to migrate transformation_projects table
     if 'transformation_projects' in existing_tables:
@@ -229,7 +341,7 @@ class SheetRepository:
     def __init__(self, db: Session):
         self.db = db
     
-    def create_or_update_sheet(self, spreadsheet_id: str, spreadsheet_url: str, 
+    def create_or_update_sheet(self, user_id: int, spreadsheet_id: str, spreadsheet_url: str, 
                               sheet_name: str, title: str, columns: List[str], 
                               sample_data: List[List[str]], total_rows: int) -> ConnectedSheet:
         # Check if sheet already exists
@@ -239,6 +351,7 @@ class SheetRepository:
         
         if existing_sheet:
             # Update existing sheet
+            existing_sheet.user_id = user_id  # Update user_id in case it changed
             existing_sheet.sheet_name = sheet_name
             existing_sheet.title = title
             existing_sheet.columns = columns
@@ -251,6 +364,7 @@ class SheetRepository:
         else:
             # Create new sheet
             new_sheet = ConnectedSheet(
+                user_id=user_id,
                 spreadsheet_id=spreadsheet_id,
                 spreadsheet_url=spreadsheet_url,
                 sheet_name=sheet_name,
@@ -267,8 +381,19 @@ class SheetRepository:
     def get_all_sheets(self) -> List[ConnectedSheet]:
         return self.db.query(ConnectedSheet).order_by(ConnectedSheet.connected_at.desc()).all()
     
+    def get_sheets_by_user(self, user_id: int) -> List[ConnectedSheet]:
+        return self.db.query(ConnectedSheet).filter(
+            ConnectedSheet.user_id == user_id
+        ).order_by(ConnectedSheet.connected_at.desc()).all()
+    
     def get_sheet_by_id(self, sheet_id: int) -> Optional[ConnectedSheet]:
         return self.db.query(ConnectedSheet).filter(ConnectedSheet.id == sheet_id).first()
+    
+    def get_sheet_by_id_and_user(self, sheet_id: int, user_id: int) -> Optional[ConnectedSheet]:
+        return self.db.query(ConnectedSheet).filter(
+            ConnectedSheet.id == sheet_id,
+            ConnectedSheet.user_id == user_id
+        ).first()
     
     def get_sheet_by_spreadsheet_id(self, spreadsheet_id: str) -> Optional[ConnectedSheet]:
         return self.db.query(ConnectedSheet).filter(
@@ -381,3 +506,51 @@ class TransformationProjectRepository:
             self.db.commit()
             return True
         return False
+
+class UserRepository:
+    def __init__(self, db: Session):
+        self.db = db
+
+    def get_by_sub(self, google_sub: str) -> Optional[User]:
+        return self.db.query(User).filter(User.google_sub == google_sub).first()
+
+    def get_by_email(self, email: str) -> Optional[User]:
+        return self.db.query(User).filter(User.email == email).first()
+
+    def increment_login(self, google_sub: str, email: Optional[str] = None, name: Optional[str] = None,
+                         picture_url: Optional[str] = None, last_ip: Optional[str] = None) -> User:
+        user = self.get_by_sub(google_sub)
+        now = datetime.now(timezone.utc)
+        if user is None:
+            user = User(
+                google_sub=google_sub,
+                email=email,
+                name=name,
+                picture_url=picture_url,
+                login_count=1,
+                first_login_at=now,
+                last_login_at=now,
+                last_ip=last_ip,
+                created_at=now,
+                updated_at=now,
+            )
+            self.db.add(user)
+            self.db.commit()
+            self.db.refresh(user)
+            return user
+
+        # Update existing user
+        user.login_count = (user.login_count or 0) + 1
+        user.last_login_at = now
+        user.updated_at = now
+        if email:
+            user.email = email
+        if name:
+            user.name = name
+        if picture_url:
+            user.picture_url = picture_url
+        if last_ip:
+            user.last_ip = last_ip
+        self.db.commit()
+        self.db.refresh(user)
+        return user

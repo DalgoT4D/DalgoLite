@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
-import { Menu, X, Home, BarChart3, Database, LogOut, User } from 'lucide-react'
+import { Menu, X, Home, BarChart3, Database, LogOut, User, GitMerge } from 'lucide-react'
 import Logo from './Logo'
 
 interface NavigationProps {
@@ -19,6 +19,7 @@ export default function Navigation({ isAuthenticated, onLogout }: NavigationProp
     { name: 'Home', href: '/home', icon: Home },
     { name: 'Connect', href: '/dashboard', icon: Database },
     { name: 'Charts', href: '/charts', icon: BarChart3 },
+    { name: 'Transform', href: '/transform', icon: GitMerge },
   ]
 
   const handleLogout = async () => {
