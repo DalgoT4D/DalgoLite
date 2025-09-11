@@ -218,6 +218,7 @@ async def google_auth():
     return RedirectResponse(url=authorization_url)
 
 @app.get("/auth/callback/google")
+@app.get("/auth/google/callback")
 async def auth_callback(code: str, state: str = None):
     try:
         
