@@ -15,7 +15,7 @@ interface OnboardingStep {
 }
 
 export default function OnboardingPage() {
-  const { isAuthenticated, isLoading, isFirstLogin, user } = useAuth()
+  const { isAuthenticated, isLoading, user, updateOnboardingStep, completeOnboarding } = useAuth()
   const router = useRouter()
   const [currentStep, setCurrentStep] = useState(0)
 
@@ -50,16 +50,28 @@ export default function OnboardingPage() {
     if (!isLoading) {
       if (!isAuthenticated) {
         router.push('/')
+      } else if (user) {
+        // Set current step from user's saved progress
+        setCurrentStep(user.onboarding_step || 0)
+
+        // If user already completed onboarding, redirect to home
+        if (user.onboarding_completed) {
+          router.push('/home')
+        }
       }
     }
-  }, [isAuthenticated, isLoading, router])
+  }, [isAuthenticated, isLoading, router, user])
 
-  const handleStartOnboarding = () => {
+  const handleStartOnboarding = async () => {
+    // Update step to 1 and save progress
+    await updateOnboardingStep(1, { startedAt: new Date().toISOString() })
     // Start with the first step - Dashboard
     router.push('/dashboard?onboarding=true')
   }
 
-  const handleSkipOnboarding = () => {
+  const handleSkipOnboarding = async () => {
+    // Mark onboarding as complete and go to home
+    await completeOnboarding()
     router.push('/home')
   }
 

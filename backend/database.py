@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, JSON, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, JSON, ForeignKey, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from sqlalchemy.sql import func
@@ -13,11 +13,37 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # Database Models
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    google_id = Column(String, unique=True, index=True, nullable=False)
+    email = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    picture_url = Column(String, nullable=True)  # Matches existing DB column
+    login_count = Column(Integer, default=1)  # Matches existing DB
+    first_login_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_login_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_ip = Column(String, nullable=True)  # Matches existing DB
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    # New onboarding fields
+    onboarding_completed = Column(Boolean, default=False)
+    onboarding_step = Column(Integer, default=0)
+    onboarding_data = Column(String, nullable=True)  # JSON stored as TEXT
+    profile_picture = Column(String, nullable=True)  # Additional field for profile pic
+
+    # Relationships - User owns these resources
+    sheets = relationship("ConnectedSheet", back_populates="user", cascade="all, delete-orphan")
+    charts = relationship("SavedChart", back_populates="user", cascade="all, delete-orphan")
+    transformation_projects = relationship("TransformationProject", back_populates="user", cascade="all, delete-orphan")
 class ConnectedSheet(Base):
     __tablename__ = "connected_sheets"
-    
+
     id = Column(Integer, primary_key=True, index=True)
-    spreadsheet_id = Column(String, unique=True, index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    spreadsheet_id = Column(String, index=True, nullable=False)  # Removed unique constraint for multi-user
     spreadsheet_url = Column(String, nullable=False)
     sheet_name = Column(String, nullable=False)
     title = Column(String, nullable=False)
@@ -26,15 +52,17 @@ class ConnectedSheet(Base):
     total_rows = Column(Integer, default=0)
     columns = Column(JSON)  # Store column names as JSON array
     sample_data = Column(JSON)  # Store first few rows as JSON
-    
+
     # Relationships
+    user = relationship("User", back_populates="sheets")
     charts = relationship("SavedChart", back_populates="sheet", cascade="all, delete-orphan")
 
 class SavedChart(Base):
     __tablename__ = "saved_charts"
-    
+
     id = Column(Integer, primary_key=True, index=True)
-    sheet_id = Column(Integer, ForeignKey("connected_sheets.id"), nullable=True)  # Allow null for transformed datasets  
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    sheet_id = Column(Integer, ForeignKey("connected_sheets.id"), nullable=True)  # Allow null for transformed datasets
     project_id = Column(Integer, nullable=True)  # Charts from transformed data (FK added later)
     chart_name = Column(String, nullable=False)
     chart_type = Column(String, nullable=False)  # bar, line, pie, scatter, histogram
@@ -43,14 +71,16 @@ class SavedChart(Base):
     chart_config = Column(JSON)  # Store chart.js configuration
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
-    
+
     # Relationships
+    user = relationship("User", back_populates="charts")
     sheet = relationship("ConnectedSheet", back_populates="charts")
 
 class TransformationProject(Base):
     __tablename__ = "transformation_projects"
-    
+
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     name = Column(String, nullable=False)
     description = Column(Text)
     sheet_ids = Column(JSON)  # Array of connected sheet IDs
@@ -63,8 +93,9 @@ class TransformationProject(Base):
     canvas_layout = Column(JSON)  # Store canvas node positions and connections
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    
-    # Relationships will be added later after proper FK setup
+
+    # Relationships
+    user = relationship("User", back_populates="transformation_projects")
 
 class AITransformationStep(Base):
     __tablename__ = "ai_transformation_steps"
@@ -311,6 +342,40 @@ def migrate_database():
                 # If anything goes wrong, continue without migration
                 pass
     
+    # Handle users table migration
+    if 'users' in existing_tables:
+        existing_columns = [col['name'] for col in inspector.get_columns('users')]
+
+        # Check if we need to update users table structure
+        if 'google_id' not in existing_columns and 'google_sub' in existing_columns:
+            print("Migrating users table: renaming google_sub to google_id...")
+            with engine.connect() as conn:
+                # Rename google_sub to google_id
+                conn.execute(text("ALTER TABLE users RENAME COLUMN google_sub TO google_id"))
+                conn.commit()
+            print("Users table migration completed")
+
+        # Add missing columns to users table
+        missing_columns = []
+        required_columns = {
+            'onboarding_completed': 'BOOLEAN DEFAULT 0',
+            'onboarding_step': 'INTEGER DEFAULT 0',
+            'onboarding_data': 'TEXT',
+            'profile_picture': 'TEXT'
+        }
+
+        for col_name, col_def in required_columns.items():
+            if col_name not in existing_columns:
+                missing_columns.append((col_name, col_def))
+
+        if missing_columns:
+            print(f"Adding missing columns to users table: {[col[0] for col in missing_columns]}")
+            with engine.connect() as conn:
+                for col_name, col_def in missing_columns:
+                    conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}"))
+                conn.commit()
+            print("Users table columns added successfully")
+
     # Create any new tables
     Base.metadata.create_all(bind=engine)
 
@@ -331,14 +396,15 @@ class SheetRepository:
     def __init__(self, db: Session):
         self.db = db
     
-    def create_or_update_sheet(self, spreadsheet_id: str, spreadsheet_url: str, 
-                              sheet_name: str, title: str, columns: List[str], 
+    def create_or_update_sheet(self, user_id: int, spreadsheet_id: str, spreadsheet_url: str,
+                              sheet_name: str, title: str, columns: List[str],
                               sample_data: List[List[str]], total_rows: int) -> ConnectedSheet:
-        # Check if sheet already exists
+        # Check if sheet already exists for this user
         existing_sheet = self.db.query(ConnectedSheet).filter(
-            ConnectedSheet.spreadsheet_id == spreadsheet_id
+            ConnectedSheet.spreadsheet_id == spreadsheet_id,
+            ConnectedSheet.user_id == user_id
         ).first()
-        
+
         if existing_sheet:
             # Update existing sheet
             existing_sheet.sheet_name = sheet_name
@@ -353,6 +419,7 @@ class SheetRepository:
         else:
             # Create new sheet
             new_sheet = ConnectedSheet(
+                user_id=user_id,
                 spreadsheet_id=spreadsheet_id,
                 spreadsheet_url=spreadsheet_url,
                 sheet_name=sheet_name,
@@ -366,19 +433,25 @@ class SheetRepository:
             self.db.refresh(new_sheet)
             return new_sheet
     
-    def get_all_sheets(self) -> List[ConnectedSheet]:
-        return self.db.query(ConnectedSheet).order_by(ConnectedSheet.connected_at.desc()).all()
-    
-    def get_sheet_by_id(self, sheet_id: int) -> Optional[ConnectedSheet]:
-        return self.db.query(ConnectedSheet).filter(ConnectedSheet.id == sheet_id).first()
-    
-    def get_sheet_by_spreadsheet_id(self, spreadsheet_id: str) -> Optional[ConnectedSheet]:
+    def get_all_sheets(self, user_id: int) -> List[ConnectedSheet]:
         return self.db.query(ConnectedSheet).filter(
-            ConnectedSheet.spreadsheet_id == spreadsheet_id
+            ConnectedSheet.user_id == user_id
+        ).order_by(ConnectedSheet.connected_at.desc()).all()
+
+    def get_sheet_by_id(self, sheet_id: int, user_id: int) -> Optional[ConnectedSheet]:
+        return self.db.query(ConnectedSheet).filter(
+            ConnectedSheet.id == sheet_id,
+            ConnectedSheet.user_id == user_id
         ).first()
-    
-    def delete_sheet(self, sheet_id: int) -> bool:
-        sheet = self.get_sheet_by_id(sheet_id)
+
+    def get_sheet_by_spreadsheet_id(self, spreadsheet_id: str, user_id: int) -> Optional[ConnectedSheet]:
+        return self.db.query(ConnectedSheet).filter(
+            ConnectedSheet.spreadsheet_id == spreadsheet_id,
+            ConnectedSheet.user_id == user_id
+        ).first()
+
+    def delete_sheet(self, sheet_id: int, user_id: int) -> bool:
+        sheet = self.get_sheet_by_id(sheet_id, user_id)
         if sheet:
             self.db.delete(sheet)
             self.db.commit()
@@ -389,10 +462,11 @@ class ChartRepository:
     def __init__(self, db: Session):
         self.db = db
     
-    def create_chart(self, sheet_id: int, chart_name: str, chart_type: str,
-                    x_axis_column: str, y_axis_column: str, chart_config: Dict[str, Any], 
+    def create_chart(self, user_id: int, sheet_id: int, chart_name: str, chart_type: str,
+                    x_axis_column: str, y_axis_column: str, chart_config: Dict[str, Any],
                     project_id: Optional[int] = None) -> SavedChart:
         new_chart = SavedChart(
+            user_id=user_id,
             sheet_id=sheet_id,
             project_id=project_id,
             chart_name=chart_name,
@@ -406,19 +480,27 @@ class ChartRepository:
         self.db.refresh(new_chart)
         return new_chart
     
-    def get_charts_by_sheet(self, sheet_id: int) -> List[SavedChart]:
-        return self.db.query(SavedChart).filter(SavedChart.sheet_id == sheet_id).order_by(SavedChart.created_at.desc()).all()
+    def get_charts_by_sheet(self, user_id: int, sheet_id: int) -> List[SavedChart]:
+        return self.db.query(SavedChart).filter(
+            SavedChart.user_id == user_id,
+            SavedChart.sheet_id == sheet_id
+        ).order_by(SavedChart.created_at.desc()).all()
     
-    def get_chart_by_id(self, chart_id: int) -> Optional[SavedChart]:
-        return self.db.query(SavedChart).filter(SavedChart.id == chart_id).first()
+    def get_chart_by_id(self, user_id: int, chart_id: int) -> Optional[SavedChart]:
+        return self.db.query(SavedChart).filter(
+            SavedChart.user_id == user_id,
+            SavedChart.id == chart_id
+        ).first()
     
-    def get_all_charts(self) -> List[SavedChart]:
-        return self.db.query(SavedChart).order_by(SavedChart.created_at.desc()).all()
+    def get_all_charts(self, user_id: int) -> List[SavedChart]:
+        return self.db.query(SavedChart).filter(
+            SavedChart.user_id == user_id
+        ).order_by(SavedChart.created_at.desc()).all()
     
-    def update_chart(self, chart_id: int, chart_name: str = None, chart_type: str = None,
-                    x_axis_column: str = None, y_axis_column: str = None, 
+    def update_chart(self, user_id: int, chart_id: int, chart_name: str = None, chart_type: str = None,
+                    x_axis_column: str = None, y_axis_column: str = None,
                     chart_config: Dict[str, Any] = None) -> Optional[SavedChart]:
-        chart = self.get_chart_by_id(chart_id)
+        chart = self.get_chart_by_id(user_id, chart_id)
         if chart:
             if chart_name is not None:
                 chart.chart_name = chart_name
@@ -437,8 +519,8 @@ class ChartRepository:
             return chart
         return None
     
-    def delete_chart(self, chart_id: int) -> bool:
-        chart = self.get_chart_by_id(chart_id)
+    def delete_chart(self, user_id: int, chart_id: int) -> bool:
+        chart = self.get_chart_by_id(user_id, chart_id)
         if chart:
             self.db.delete(chart)
             self.db.commit()
@@ -449,8 +531,9 @@ class TransformationProjectRepository:
     def __init__(self, db: Session):
         self.db = db
     
-    def create_project(self, name: str, description: str, sheet_ids: List[int]) -> TransformationProject:
+    def create_project(self, user_id: int, name: str, description: str, sheet_ids: List[int]) -> TransformationProject:
         project = TransformationProject(
+            user_id=user_id,
             name=name,
             description=description,
             sheet_ids=sheet_ids,
@@ -462,14 +545,19 @@ class TransformationProjectRepository:
         self.db.refresh(project)
         return project
     
-    def get_all_projects(self) -> List[TransformationProject]:
-        return self.db.query(TransformationProject).order_by(TransformationProject.created_at.desc()).all()
+    def get_all_projects(self, user_id: int) -> List[TransformationProject]:
+        return self.db.query(TransformationProject).filter(
+            TransformationProject.user_id == user_id
+        ).order_by(TransformationProject.created_at.desc()).all()
     
-    def get_project_by_id(self, project_id: int) -> Optional[TransformationProject]:
-        return self.db.query(TransformationProject).filter(TransformationProject.id == project_id).first()
+    def get_project_by_id(self, user_id: int, project_id: int) -> Optional[TransformationProject]:
+        return self.db.query(TransformationProject).filter(
+            TransformationProject.user_id == user_id,
+            TransformationProject.id == project_id
+        ).first()
     
-    def update_project(self, project_id: int, **kwargs) -> Optional[TransformationProject]:
-        project = self.get_project_by_id(project_id)
+    def update_project(self, user_id: int, project_id: int, **kwargs) -> Optional[TransformationProject]:
+        project = self.get_project_by_id(user_id, project_id)
         if project:
             for key, value in kwargs.items():
                 if hasattr(project, key) and value is not None:
@@ -480,8 +568,8 @@ class TransformationProjectRepository:
             return project
         return None
     
-    def delete_project(self, project_id: int) -> bool:
-        project = self.get_project_by_id(project_id)
+    def delete_project(self, user_id: int, project_id: int) -> bool:
+        project = self.get_project_by_id(user_id, project_id)
         if project:
             self.db.delete(project)
             self.db.commit()

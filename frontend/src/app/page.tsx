@@ -8,24 +8,34 @@ import Logo from '@/components/Logo'
 import GoogleSignInButton from '@/components/GoogleSignInButton'
 
 export default function LandingPage() {
-  const { isAuthenticated, isLoading, login, checkAuthStatus } = useAuth()
+  const { isAuthenticated, isLoading, login, checkAuthStatus, user } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
-    // Check if user just connected (redirected from OAuth)
+    // Check if user was redirected from OAuth callback
     const urlParams = new URLSearchParams(window.location.search)
-    if (urlParams.get('connected') === 'true') {
-      // Clean up URL and redirect to home after a moment
+    const userId = urlParams.get('user_id')
+
+    if (userId) {
+      // Clean up URL
       window.history.replaceState({}, document.title, '/')
-      checkAuthStatus() // Refresh auth status
-      setTimeout(() => {
-        router.push('/home')
-      }, 2000)
-    } else if (isAuthenticated && !isLoading) {
-      // If already authenticated, redirect to home
-      router.push('/home')
+      // Refresh auth status to get user data
+      checkAuthStatus()
     }
-  }, [router, checkAuthStatus, isAuthenticated, isLoading])
+  }, [checkAuthStatus])
+
+  useEffect(() => {
+    // Handle routing based on user status
+    if (!isLoading && isAuthenticated && user) {
+      if (!user.onboarding_completed) {
+        // New user or incomplete onboarding - go to onboarding
+        router.push('/onboarding')
+      } else {
+        // Existing user with completed onboarding - go to home
+        router.push('/home')
+      }
+    }
+  }, [isAuthenticated, isLoading, user, router])
 
   const handleConnect = () => {
     login()

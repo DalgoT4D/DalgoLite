@@ -8,6 +8,7 @@ import os
 import json
 import re
 import pandas as pd
+from datetime import datetime, timezone
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -16,7 +17,7 @@ import gspread
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from database import create_tables, get_db, SheetRepository, ChartRepository, TransformationProjectRepository, JoinRepository, ConnectedSheet, SavedChart, TransformationProject, TransformedDataWarehouse, PipelineExecutionHistory, AITransformationStep, JoinOperation, CanvasNode, CanvasConnection, engine
+from database import create_tables, get_db, SheetRepository, ChartRepository, TransformationProjectRepository, JoinRepository, ConnectedSheet, SavedChart, TransformationProject, TransformedDataWarehouse, PipelineExecutionHistory, AITransformationStep, JoinOperation, CanvasNode, CanvasConnection, engine, User
 from pydantic import BaseModel
 import hashlib
 import asyncio
@@ -70,6 +71,17 @@ REDIRECT_URI = os.getenv('GOOGLE_REDIRECT_URI')
 
 # In-memory storage for demo (use database in production)
 user_credentials = {}
+
+# Dependency to get current authenticated user
+async def get_current_user(db: Session = Depends(get_db)) -> User:
+    """Get the currently authenticated user"""
+    if 'current_user_id' not in user_credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user_credentials.get('current_user_id')
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
 
 def get_refreshed_credentials():
     """Get Google credentials with automatic token refresh"""
@@ -212,16 +224,17 @@ async def google_auth():
     
     authorization_url, state = flow.authorization_url(
         access_type='offline',
-        include_granted_scopes='true'
+        include_granted_scopes='true',
+        prompt='select_account'
     )
     
     return RedirectResponse(url=authorization_url)
 
 @app.get("/auth/callback/google")
 @app.get("/auth/google/callback")
-async def auth_callback(code: str, state: str = None):
+async def auth_callback(code: str, state: str = None, db: Session = Depends(get_db)):
     try:
-        
+
         flow = Flow.from_client_config(
             {
                 "web": {
@@ -235,13 +248,44 @@ async def auth_callback(code: str, state: str = None):
             scopes=SCOPES
         )
         flow.redirect_uri = REDIRECT_URI
-        
+
         flow.fetch_token(code=code)
         credentials = flow.credentials
-        
-        
-        # Store credentials (use proper session management in production)
-        user_credentials['default'] = {
+
+        # Get user info from Google
+        service = build('oauth2', 'v2', credentials=credentials)
+        user_info = service.userinfo().get().execute()
+
+        # Check if user exists or create new one
+        user = db.query(User).filter(User.google_id == user_info['id']).first()
+
+        if not user:
+            # New user - create account
+            user = User(
+                email=user_info.get('email'),
+                google_id=user_info['id'],
+                name=user_info.get('name', ''),
+                picture_url=user_info.get('picture', ''),
+                onboarding_completed=False,
+                onboarding_step=0,
+                login_count=1,
+                first_login_at=datetime.now(timezone.utc),
+                last_login_at=datetime.now(timezone.utc)
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            is_new_user = True
+        else:
+            # Existing user - update last login and count
+            user.last_login_at = datetime.now(timezone.utc)
+            user.login_count = (user.login_count or 0) + 1
+            user.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            is_new_user = False
+
+        # Store credentials with user ID
+        user_credentials[str(user.id)] = {
             'token': credentials.token,
             'refresh_token': credentials.refresh_token,
             'token_uri': credentials.token_uri,
@@ -249,11 +293,19 @@ async def auth_callback(code: str, state: str = None):
             'client_secret': credentials.client_secret,
             'scopes': credentials.scopes
         }
-        
-        
-        # Redirect back to frontend
-        return RedirectResponse(url=f"{FRONTEND_URL}?connected=true")
-        
+
+        # Also store as default for backward compatibility
+        user_credentials['default'] = user_credentials[str(user.id)]
+
+        # Store user ID in session (simplified - use proper session management in production)
+        user_credentials['current_user_id'] = user.id
+
+        # Redirect based on onboarding status
+        if not user.onboarding_completed:
+            return RedirectResponse(url=f"{FRONTEND_URL}/onboarding?user_id={user.id}")
+        else:
+            return RedirectResponse(url=f"{FRONTEND_URL}/home?user_id={user.id}")
+
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -261,19 +313,46 @@ async def auth_callback(code: str, state: str = None):
 async def logout():
     """Clear user credentials and log out"""
     try:
+        logout_url = None
+
+        # If we have credentials, revoke the Google token
+        if 'default' in user_credentials:
+            try:
+                creds = Credentials(**user_credentials['default'])
+                # Revoke the token with Google
+                revoke_url = f"https://oauth2.googleapis.com/revoke?token={creds.token}"
+                import requests
+                requests.post(revoke_url)
+
+                # Provide Google logout URL to clear all Google sessions
+                logout_url = "https://accounts.google.com/logout"
+            except Exception as revoke_error:
+                print(f"Error revoking token: {revoke_error}")
+
         # Clear stored credentials
         user_credentials.clear()
-        return {"message": "Logged out successfully"}
+
+        return {
+            "message": "Logged out successfully",
+            "logout_url": logout_url
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/auth/status")
-async def auth_status():
-    """Check if user is authenticated"""
+async def auth_status(db: Session = Depends(get_db)):
+    """Check if user is authenticated and their onboarding status"""
     try:
-        if 'default' not in user_credentials:
+        if 'current_user_id' not in user_credentials or 'default' not in user_credentials:
             return {"authenticated": False}
-        
+
+        # Get current user
+        user_id = user_credentials.get('current_user_id')
+        user = db.query(User).filter(User.id == user_id).first()
+
+        if not user:
+            return {"authenticated": False}
+
         # Optionally verify credentials are still valid
         creds = Credentials(**user_credentials['default'])
         if creds.expired and creds.refresh_token:
@@ -288,8 +367,19 @@ async def auth_status():
                 'client_secret': creds.client_secret,
                 'scopes': creds.scopes
             }
-        
-        return {"authenticated": True}
+            user_credentials[str(user_id)] = user_credentials['default']
+
+        return {
+            "authenticated": True,
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "profile_picture": user.picture_url or user.profile_picture,
+                "onboarding_completed": user.onboarding_completed,
+                "onboarding_step": user.onboarding_step
+            }
+        }
     except Exception as e:
         # If there's any error with credentials, consider user not authenticated
         user_credentials.clear()
@@ -300,6 +390,105 @@ async def clear_auth():
     """Clear stored credentials to force re-authentication"""
     user_credentials.clear()
     return {"message": "Credentials cleared successfully"}
+
+# Onboarding endpoints
+@app.get("/api/user/onboarding-status")
+async def get_onboarding_status(db: Session = Depends(get_db)):
+    """Get current user's onboarding status"""
+    if 'current_user_id' not in user_credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        user_id = user_credentials.get('current_user_id')
+        user = db.query(User).filter(User.id == user_id).first()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Parse JSON data
+        import json
+        onboarding_data = {}
+        if user.onboarding_data:
+            try:
+                onboarding_data = json.loads(user.onboarding_data)
+            except:
+                onboarding_data = {}
+
+        return {
+            "onboarding_completed": user.onboarding_completed,
+            "onboarding_step": user.onboarding_step,
+            "onboarding_data": onboarding_data
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/user/update-onboarding")
+async def update_onboarding(update_data: Dict[str, Any], db: Session = Depends(get_db)):
+    """Update user's onboarding progress"""
+    if 'current_user_id' not in user_credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        user_id = user_credentials.get('current_user_id')
+        user = db.query(User).filter(User.id == user_id).first()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Update onboarding fields
+        if 'step' in update_data:
+            user.onboarding_step = update_data['step']
+
+        if 'completed' in update_data:
+            user.onboarding_completed = update_data['completed']
+
+        if 'data' in update_data:
+            # Merge new data with existing
+            import json
+            existing_data = {}
+            if user.onboarding_data:
+                try:
+                    existing_data = json.loads(user.onboarding_data)
+                except:
+                    existing_data = {}
+            existing_data.update(update_data['data'])
+            user.onboarding_data = json.dumps(existing_data)
+
+        db.commit()
+
+        return {
+            "success": True,
+            "onboarding_completed": user.onboarding_completed,
+            "onboarding_step": user.onboarding_step
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/user/complete-onboarding")
+async def complete_onboarding(db: Session = Depends(get_db)):
+    """Mark onboarding as complete"""
+    if 'current_user_id' not in user_credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        user_id = user_credentials.get('current_user_id')
+        user = db.query(User).filter(User.id == user_id).first()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user.onboarding_completed = True
+        db.commit()
+
+        return {"success": True, "message": "Onboarding completed successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/sheets/list")
 async def list_sheets():
@@ -317,7 +506,11 @@ async def list_sheets():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/sheets/analyze")
-async def analyze_sheet(sheet_data: Dict[str, Any], db: Session = Depends(get_db)):
+async def analyze_sheet(
+    sheet_data: Dict[str, Any],
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     try:
         
         spreadsheet_input = sheet_data.get('spreadsheet_id')
@@ -411,6 +604,7 @@ async def analyze_sheet(sheet_data: Dict[str, Any], db: Session = Depends(get_db
         sample_data = values[:10]  # Store first 10 rows for display
         
         saved_sheet = sheet_repo.create_or_update_sheet(
+            user_id=current_user.id,
             spreadsheet_id=spreadsheet_id,
             spreadsheet_url=spreadsheet_input,
             sheet_name=actual_sheet_name,
@@ -605,14 +799,14 @@ def generate_chart_recommendations(values: List[List[str]]) -> List[Dict[str, An
 
 # Database endpoints for sheets
 @app.get("/sheets/connected")
-async def get_connected_sheets(db: Session = Depends(get_db)):
-    """Get all connected sheets from database"""
+async def get_connected_sheets(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all connected sheets from database for the current user"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-            
         sheet_repo = SheetRepository(db)
-        sheets = sheet_repo.get_all_sheets()
+        sheets = sheet_repo.get_all_sheets(current_user.id)
         
         return {
             "sheets": [
@@ -843,11 +1037,11 @@ async def delete_sheet(sheet_id: int, db: Session = Depends(get_db)):
 
 # Chart endpoints
 @app.get("/sheets/{sheet_id}/charts")
-async def get_sheet_charts(sheet_id: int, db: Session = Depends(get_db)):
+async def get_sheet_charts(sheet_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get all charts for a specific sheet"""
     try:
         chart_repo = ChartRepository(db)
-        charts = chart_repo.get_charts_by_sheet(sheet_id)
+        charts = chart_repo.get_charts_by_sheet(current_user.id, sheet_id)
         
         chart_list = []
         for chart in charts:
@@ -882,11 +1076,12 @@ async def get_sheet_charts(sheet_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/charts")
-async def create_chart(chart_request: ChartCreateRequest, db: Session = Depends(get_db)):
+async def create_chart(chart_request: ChartCreateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Create a new chart"""
     try:
         chart_repo = ChartRepository(db)
         chart = chart_repo.create_chart(
+            user_id=current_user.id,
             sheet_id=chart_request.sheet_id,
             chart_name=chart_request.chart_name,
             chart_type=chart_request.chart_type,
@@ -908,12 +1103,12 @@ async def create_chart(chart_request: ChartCreateRequest, db: Session = Depends(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/charts/{chart_id}")
-async def get_chart(chart_id: int, db: Session = Depends(get_db)):
+async def get_chart(chart_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get a specific chart"""
     try:
         chart_repo = ChartRepository(db)
-        chart = chart_repo.get_chart_by_id(chart_id)
-        
+        chart = chart_repo.get_chart_by_id(current_user.id, chart_id)
+
         if not chart:
             raise HTTPException(status_code=404, detail="Chart not found")
         
@@ -934,11 +1129,12 @@ async def get_chart(chart_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/charts/{chart_id}")
-async def update_chart(chart_id: int, chart_request: ChartUpdateRequest, db: Session = Depends(get_db)):
+async def update_chart(chart_id: int, chart_request: ChartUpdateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Update an existing chart"""
     try:
         chart_repo = ChartRepository(db)
         chart = chart_repo.update_chart(
+            user_id=current_user.id,
             chart_id=chart_id,
             chart_name=chart_request.chart_name,
             chart_type=chart_request.chart_type,
@@ -965,11 +1161,11 @@ async def update_chart(chart_id: int, chart_request: ChartUpdateRequest, db: Ses
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/charts/{chart_id}")
-async def delete_chart(chart_id: int, db: Session = Depends(get_db)):
+async def delete_chart(chart_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Delete a chart"""
     try:
         chart_repo = ChartRepository(db)
-        success = chart_repo.delete_chart(chart_id)
+        success = chart_repo.delete_chart(current_user.id, chart_id)
         
         if not success:
             raise HTTPException(status_code=404, detail="Chart not found")
@@ -982,17 +1178,14 @@ async def delete_chart(chart_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/charts")
-async def get_all_charts(db: Session = Depends(get_db)):
+async def get_all_charts(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get all charts across all sources with metadata"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
         chart_repo = ChartRepository(db)
         sheet_repo = SheetRepository(db)
-        
-        # Get all charts
-        charts = db.query(SavedChart).order_by(SavedChart.updated_at.desc()).all()
+
+        # Get all charts for the current user
+        charts = chart_repo.get_all_charts(current_user.id)
         
         enriched_charts = []
         for chart in charts:
@@ -1483,14 +1676,11 @@ async def get_all_data_sources(db: Session = Depends(get_db)):
 
 # Transformation Project endpoints
 @app.get("/projects")
-async def get_projects(db: Session = Depends(get_db)):
+async def get_projects(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get all transformation projects"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-            
         project_repo = TransformationProjectRepository(db)
-        projects = project_repo.get_all_projects()
+        projects = project_repo.get_all_projects(current_user.id)
         
         return {
             "projects": [
@@ -1515,20 +1705,19 @@ async def get_projects(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/projects")
-async def create_project(project_request: ProjectCreateRequest, db: Session = Depends(get_db)):
+async def create_project(project_request: ProjectCreateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Create a new transformation project"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
-        # Validate that all sheet IDs exist
+        # Validate that all sheet IDs exist and belong to current user
         sheet_repo = SheetRepository(db)
         for sheet_id in project_request.sheet_ids:
-            if not sheet_repo.get_sheet_by_id(sheet_id):
-                raise HTTPException(status_code=400, detail=f"Sheet with ID {sheet_id} not found")
-        
+            sheet = sheet_repo.get_sheet_by_id(current_user.id, sheet_id)
+            if not sheet:
+                raise HTTPException(status_code=400, detail=f"Sheet with ID {sheet_id} not found or not accessible")
+
         project_repo = TransformationProjectRepository(db)
         project = project_repo.create_project(
+            user_id=current_user.id,
             name=project_request.name,
             description=project_request.description,
             sheet_ids=project_request.sheet_ids
@@ -1547,14 +1736,11 @@ async def create_project(project_request: ProjectCreateRequest, db: Session = De
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/projects/{project_id}")
-async def get_project(project_id: int, db: Session = Depends(get_db)):
+async def get_project(project_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get a specific transformation project"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
