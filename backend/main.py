@@ -17,7 +17,7 @@ import gspread
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from database import create_tables, get_db, SheetRepository, ChartRepository, TransformationProjectRepository, JoinRepository, ConnectedSheet, SavedChart, TransformationProject, TransformedDataWarehouse, PipelineExecutionHistory, AITransformationStep, JoinOperation, CanvasNode, CanvasConnection, engine, User
+from database import create_tables, get_db, SheetRepository, ChartRepository, TransformationProjectRepository, JoinRepository, QualitativeDataRepository, ConnectedSheet, SavedChart, TransformationProject, TransformedDataWarehouse, PipelineExecutionHistory, AITransformationStep, JoinOperation, QualitativeDataOperation, CanvasNode, CanvasConnection, engine, User
 from pydantic import BaseModel
 import hashlib
 import asyncio
@@ -27,6 +27,7 @@ from llm_service import llm_service
 from data_context import DataContextGenerator
 from chart_service import ChartCreationService, get_chart_tools
 from ai_transformation_service import ai_service
+from qualitative_data_service import get_qualitative_service
 
 # Create database tables
 create_tables()
@@ -167,9 +168,26 @@ class TransformationStepUpdateRequest(BaseModel):
     step_name: Optional[str] = None
     user_prompt: Optional[str] = None
     output_table_name: Optional[str] = None
-    upstream_step_ids: Optional[List[int]] = None
-    upstream_sheet_ids: Optional[List[int]] = None
-    canvas_position: Optional[Dict[str, float]] = None
+
+class QualitativeDataCreateRequest(BaseModel):
+    project_id: int
+    name: str
+    source_table_id: int
+    source_table_type: str  # 'sheet' or 'transformation'  
+    qualitative_column: str
+    analysis_type: str  # 'sentiment' or 'summarization'
+    aggregation_column: Optional[str] = None  # Optional column for group-by summarization
+    canvas_position: Dict[str, int]
+    output_table_name: Optional[str] = None
+
+class QualitativeDataUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    source_table_id: Optional[int] = None
+    source_table_type: Optional[str] = None
+    qualitative_column: Optional[str] = None
+    analysis_type: Optional[str] = None
+    aggregation_column: Optional[str] = None
+    output_table_name: Optional[str] = None
 
 class CanvasLayoutUpdateRequest(BaseModel):
     nodes: List[Dict[str, Any]]
@@ -560,9 +578,19 @@ async def analyze_sheet(
         # Get sheet data - try different range formats
         sheet = service.spreadsheets()
         
+        # Get actual sheet name first
+        actual_sheet_name = 'Sheet1'  # fallback
+        try:
+            sheets = spreadsheet_metadata.get('sheets', [])
+            if sheets:
+                actual_sheet_name = sheets[0]['properties']['title']
+        except Exception:
+            pass
+        
         # Try multiple range formats in order of preference
         range_attempts = [
-            range_name,  # Original range (Sheet1!A:Z)
+            f"{actual_sheet_name}!A:Z",  # Use actual sheet name
+            range_name,  # Original range (might be Sheet1!A:Z)
             'A:Z',       # Without sheet name
             'A1:Z1000',  # Specific range
             '',          # Empty range (gets all data)
@@ -570,7 +598,6 @@ async def analyze_sheet(
         
         result = None
         successful_range = None
-        actual_sheet_name = 'Sheet1'
         
         for attempt_range in range_attempts:
             try:
@@ -1236,7 +1263,7 @@ async def get_all_charts(current_user: User = Depends(get_current_user), db: Ses
 class UnifiedChartCreateRequest(BaseModel):
     chart_name: str
     chart_type: str
-    x_axis_column: str
+    x_axis_column: Optional[str] = None  # Optional for table charts
     y_axis_column: Optional[str] = None
     chart_config: Optional[dict] = {}
     # Source identification
@@ -1453,34 +1480,51 @@ async def get_chart_data(chart_id: int, current_user: User = Depends(get_current
         headers = values[0]
         data_rows = values[1:]
         
-        # Find column indices
-        try:
-            x_col_idx = headers.index(chart.x_axis_column)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Column '{chart.x_axis_column}' not found")
-        
-        y_col_idx = None
-        if chart.y_axis_column:
+        # For table charts, we don't need specific column indices
+        if chart.chart_type.lower() == 'table':
+            # Convert data to dict format for easier table rendering
+            table_data = []
+            for row in data_rows:
+                if row:  # Skip empty rows
+                    row_dict = {}
+                    for i, header in enumerate(headers):
+                        row_dict[header] = row[i] if i < len(row) else ''
+                    table_data.append(row_dict)
+            
+            processed_data = process_chart_data(table_data, None, None, chart.chart_type, chart.chart_config)
+        else:
+            # Find column indices for regular charts
             try:
-                y_col_idx = headers.index(chart.y_axis_column)
+                x_col_idx = headers.index(chart.x_axis_column) if chart.x_axis_column and chart.x_axis_column.strip() else None
             except ValueError:
-                raise HTTPException(status_code=400, detail=f"Column '{chart.y_axis_column}' not found")
-        
-        # Process data based on chart type
-        processed_data = process_chart_data(data_rows, x_col_idx, y_col_idx, chart.chart_type, chart.chart_config)
+                raise HTTPException(status_code=400, detail=f"Column '{chart.x_axis_column}' not found")
+            
+            y_col_idx = None
+            if chart.y_axis_column:
+                try:
+                    y_col_idx = headers.index(chart.y_axis_column)
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=f"Column '{chart.y_axis_column}' not found")
+            
+            # Process data based on chart type
+            processed_data = process_chart_data(data_rows, x_col_idx, y_col_idx, chart.chart_type, chart.chart_config)
         
         return {
             "chart_id": chart.id,
             "chart_name": chart.chart_name,
             "chart_type": chart.chart_type,
             "data": processed_data["data"],
-            "options": processed_data["options"]
+            "options": processed_data["options"],
+            "chart_config": chart.chart_config
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Chart data endpoint error: {type(e).__name__}: {str(e)}")
+        print(f"DEBUG: Chart data endpoint error for chart_id={chart_id}")
+        print(f"DEBUG: Chart type: {chart.chart_type if 'chart' in locals() else 'Unknown'}")
+        print(f"DEBUG: Error type: {type(e).__name__}")
+        print(f"DEBUG: Error message: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Chart data error: {str(e)}")
@@ -1489,6 +1533,17 @@ def process_chart_data(data_rows, x_col_idx, y_col_idx, chart_type, chart_config
     """Process raw data into Chart.js format"""
     import pandas as pd
     from collections import Counter
+    
+    # Handle table charts differently
+    if chart_type.lower() == 'table':
+        # Return raw data for table rendering
+        return {
+            "data": {
+                "raw_data": data_rows,
+                "chart_config": chart_config
+            },
+            "options": {}
+        }
     
     # Extract x-axis values
     x_values = [str(row[x_col_idx]) if len(row) > x_col_idx else '' for row in data_rows if row]
@@ -1857,11 +1912,22 @@ def fetch_full_sheet_data_from_google(sheet: ConnectedSheet) -> pd.DataFrame:
         
         service = build('sheets', 'v4', credentials=creds)
         
+        # Get actual sheet name first (same logic as analyze_sheet)
+        actual_sheet_name = 'Sheet1'  # fallback
+        try:
+            spreadsheet_metadata = service.spreadsheets().get(spreadsheetId=sheet.spreadsheet_id).execute()
+            sheets = spreadsheet_metadata.get('sheets', [])
+            if sheets:
+                actual_sheet_name = sheets[0]['properties']['title']
+        except Exception:
+            pass
+        
         # Use the same range detection logic as analyze_sheet
         range_attempts = [
-            f"{sheet.sheet_name}!A:Z",  # Try with sheet name first
-            'A:Z',                      # Without sheet name  
-            'A1:Z1000',                 # Specific range
+            f"{actual_sheet_name}!A:Z",  # Try with actual sheet name first
+            f"{sheet.sheet_name}!A:Z",   # Try with stored sheet name (for backward compatibility)
+            'A:Z',                       # Without sheet name  
+            'A1:Z1000',                  # Specific range
         ]
         
         result = None
@@ -2452,6 +2518,480 @@ async def delete_join(project_id: int, join_id: int, db: Session = Depends(get_d
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# Qualitative Data Endpoints
+@app.post("/projects/{project_id}/qualitative-data")
+async def create_qualitative_data_operation(
+    project_id: int, 
+    request: QualitativeDataCreateRequest, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Create a new qualitative data analysis operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Verify project exists
+        project_repo = TransformationProjectRepository(db)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Validate source table
+        sheet_repo = SheetRepository(db)
+        
+        if request.source_table_type == 'sheet':
+            source_table = sheet_repo.get_sheet_by_id(request.source_table_id, current_user.id)
+            if not source_table:
+                raise HTTPException(status_code=404, detail="Source table (sheet) not found")
+            
+            # Validate column exists
+            if not source_table.columns or request.qualitative_column not in source_table.columns:
+                available_cols = source_table.columns or []
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Column '{request.qualitative_column}' not found. Available columns: {available_cols}"
+                )
+        elif request.source_table_type == 'transformation':
+            # Validate transformation step exists and is completed
+            source_step = db.query(AITransformationStep).filter(
+                AITransformationStep.id == request.source_table_id,
+                AITransformationStep.project_id == project_id,
+                AITransformationStep.status == 'completed'
+            ).first()
+            if not source_step:
+                raise HTTPException(status_code=404, detail="Source table (transformation step) not found or not completed")
+            
+            # Validate column exists in output
+            if not source_step.output_columns or request.qualitative_column not in source_step.output_columns:
+                available_cols = source_step.output_columns or []
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Column '{request.qualitative_column}' not found. Available columns: {available_cols}"
+                )
+        else:
+            raise HTTPException(status_code=400, detail="Invalid source_table_type. Must be 'sheet' or 'transformation'")
+        
+        # Validate analysis type
+        if request.analysis_type not in ['sentiment', 'summarization']:
+            raise HTTPException(status_code=400, detail="Invalid analysis_type. Must be 'sentiment' or 'summarization'")
+        
+        # Debug aggregation column
+        print(f"🚀 CREATE DEBUG: aggregation_column = {repr(request.aggregation_column)}")
+        print(f"🚀 CREATE DEBUG: type = {type(request.aggregation_column)}")
+        print(f"🚀 CREATE DEBUG: full request = {request}")
+        
+        # Clean up aggregation_column for database storage
+        clean_aggregation_column = request.aggregation_column
+        if clean_aggregation_column == "":
+            clean_aggregation_column = None
+        print(f"🚀 CREATE DEBUG: cleaned aggregation_column = {repr(clean_aggregation_column)}")
+        
+        # Create qualitative data operation
+        qualitative_repo = QualitativeDataRepository(db)
+        
+        qualitative_op = qualitative_repo.create_qualitative_operation(
+            project_id=project_id,
+            name=request.name,
+            source_table_id=request.source_table_id,
+            source_table_type=request.source_table_type,
+            qualitative_column=request.qualitative_column,
+            analysis_type=request.analysis_type,
+            aggregation_column=clean_aggregation_column,
+            canvas_position=request.canvas_position,
+            output_table_name=request.output_table_name
+        )
+        
+        return {
+            "operation_id": qualitative_op.id,
+            "status": "created",
+            "message": "Qualitative data analysis operation created successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/projects/{project_id}/qualitative-data")
+async def get_project_qualitative_operations(
+    project_id: int, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Get all qualitative data operations for a project"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Verify project exists
+        project_repo = TransformationProjectRepository(db)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        qualitative_repo = QualitativeDataRepository(db)
+        operations = qualitative_repo.get_qualitative_operations_by_project(project_id)
+        
+        return {
+            "operations": [{
+                "id": op.id,
+                "name": op.name,
+                "source_table_id": op.source_table_id,
+                "source_table_type": op.source_table_type,
+                "qualitative_column": op.qualitative_column,
+                "analysis_type": op.analysis_type,
+                "aggregation_column": op.aggregation_column,
+                "status": op.status,
+                "error_message": op.error_message,
+                "output_table_name": op.output_table_name,
+                "canvas_position": op.canvas_position,
+                "total_records_processed": op.total_records_processed,
+                "batch_count": op.batch_count,
+                "execution_time_ms": op.execution_time_ms,
+                "created_at": op.created_at.isoformat() if op.created_at else None,
+                "updated_at": op.updated_at.isoformat() if op.updated_at else None
+            } for op in operations]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/projects/{project_id}/qualitative-data/{operation_id}")
+async def update_qualitative_data_operation(
+    project_id: int, 
+    operation_id: int, 
+    request: QualitativeDataUpdateRequest, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Update a qualitative data operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        qualitative_repo = QualitativeDataRepository(db)
+        
+        # Get existing operation
+        operation = qualitative_repo.get_qualitative_operation_by_id(operation_id)
+        if not operation or operation.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Qualitative data operation not found")
+        
+        # Prepare updated values (only update provided fields)
+        name = request.name if request.name is not None else operation.name
+        source_table_id = request.source_table_id if request.source_table_id is not None else operation.source_table_id
+        source_table_type = request.source_table_type if request.source_table_type is not None else operation.source_table_type
+        qualitative_column = request.qualitative_column if request.qualitative_column is not None else operation.qualitative_column
+        analysis_type = request.analysis_type if request.analysis_type is not None else operation.analysis_type
+        aggregation_column = request.aggregation_column if request.aggregation_column is not None else getattr(operation, 'aggregation_column', None)
+        output_table_name = request.output_table_name if request.output_table_name is not None else operation.output_table_name
+        
+        # Validate analysis type if provided
+        if request.analysis_type and request.analysis_type not in ['sentiment', 'summarization']:
+            raise HTTPException(status_code=400, detail="Invalid analysis_type. Must be 'sentiment' or 'summarization'")
+        
+        # Update the operation
+        updated_operation = qualitative_repo.update_qualitative_operation(
+            operation_id=operation_id,
+            name=name,
+            source_table_id=source_table_id,
+            source_table_type=source_table_type,
+            qualitative_column=qualitative_column,
+            analysis_type=analysis_type,
+            aggregation_column=aggregation_column,
+            output_table_name=output_table_name
+        )
+        
+        if updated_operation:
+            return {
+                "status": "updated",
+                "message": "Qualitative data operation updated successfully"
+            }
+        else:
+            raise HTTPException(status_code=404, detail="Qualitative data operation not found")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/projects/{project_id}/qualitative-data/{operation_id}/execute")
+async def execute_qualitative_data_operation(
+    project_id: int, 
+    operation_id: int, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Execute a qualitative data analysis operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        qualitative_repo = QualitativeDataRepository(db)
+        
+        # Get operation
+        operation = qualitative_repo.get_qualitative_operation_by_id(operation_id)
+        if not operation or operation.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Qualitative data operation not found")
+        
+        # Update status to running
+        qualitative_repo.update_qualitative_status(
+            operation_id=operation_id,
+            status='running'
+        )
+        
+        import time
+        start_time = time.time()
+        
+        try:
+            # Get source data
+            source_df = None
+            sheet_repo = SheetRepository(db)
+            
+            if operation.source_table_type == 'sheet':
+                # Get data from sheet
+                source_sheet = sheet_repo.get_sheet_by_id(operation.source_table_id, current_user.id)
+                if not source_sheet:
+                    raise Exception("Source sheet not found")
+                
+                # Get spreadsheet data from warehouse (same as AI transformations)
+                source_df = fetch_full_sheet_data(source_sheet)
+                
+                if source_df.empty:
+                    raise Exception("No data found in source sheet")
+                    
+            elif operation.source_table_type == 'transformation':
+                # Get data from transformation result
+                source_step = db.query(AITransformationStep).filter(
+                    AITransformationStep.id == operation.source_table_id
+                ).first()
+                if not source_step or source_step.status != 'completed':
+                    raise Exception("Source transformation step not found or not completed")
+                
+                # Load data from warehouse table
+                if not source_step.output_table_name:
+                    raise Exception("Source transformation has no output table")
+                
+                source_df = pd.read_sql_table(source_step.output_table_name, engine)
+            else:
+                raise Exception(f"Invalid source table type: {operation.source_table_type}")
+            
+            if source_df is None or source_df.empty:
+                raise Exception("No data available for analysis")
+            
+            print(f"DEBUG: Source data shape: {source_df.shape}")
+            print(f"DEBUG: Source data columns: {source_df.columns.tolist()}")
+            
+            # Validate column exists
+            if operation.qualitative_column not in source_df.columns:
+                available_cols = list(source_df.columns)
+                raise Exception(f"Column '{operation.qualitative_column}' not found. Available: {available_cols}")
+            
+            print(f"DEBUG: Qualitative column '{operation.qualitative_column}' sample values:\n{source_df[operation.qualitative_column].head()}")
+            print(f"DEBUG: Non-null values in qualitative column: {source_df[operation.qualitative_column].notna().sum()}")
+            print(f"⚡ EXECUTE DEBUG: Aggregation column for analysis: {repr(operation.aggregation_column)}")
+            print(f"⚡ EXECUTE DEBUG: type = {type(operation.aggregation_column)}")
+            
+            # Perform analysis using the service
+            service = get_qualitative_service()
+            analysis_result = await service.analyze_qualitative_data(
+                df=source_df,
+                text_column=operation.qualitative_column,
+                analysis_type=operation.analysis_type,
+                aggregation_column=operation.aggregation_column
+            )
+            
+            if not analysis_result.get('success'):
+                raise Exception(analysis_result.get('error', 'Analysis failed'))
+            
+            # Save result to database
+            result_df = analysis_result['output_data']
+            
+            print(f"DEBUG: Analysis result shape: {result_df.shape}")
+            print(f"DEBUG: Analysis result columns: {result_df.columns.tolist()}")
+            print(f"DEBUG: First few result rows:\n{result_df.head()}")
+            
+            # Generate output table name using same logic as AI transformations
+            if operation.output_table_name:
+                # Use custom table name if provided
+                import re
+                output_table_name = re.sub(r'[^\w]', '_', operation.output_table_name.lower())
+            else:
+                # Use default pattern
+                output_table_name = f"qualitative_{operation.analysis_type}_{operation.id}_{int(time.time())}"
+            
+            print(f"DEBUG: Saving result to table: {output_table_name}")
+            
+            # Store result in database
+            result_df.to_sql(output_table_name, engine, if_exists='replace', index=False)
+            
+            print(f"DEBUG: Successfully saved {len(result_df)} rows to database")
+            
+            # Calculate execution time
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            
+            # Update operation status
+            # Try to use new field, fall back to old field for compatibility
+            try:
+                qualitative_repo.update_qualitative_status(
+                    operation_id=operation_id,
+                    status='completed',
+                    actual_table_name=output_table_name,
+                    output_columns=list(result_df.columns),
+                    execution_time_ms=execution_time_ms,
+                    total_records=analysis_result.get('total_records', len(source_df)),
+                    batch_count=analysis_result.get('batch_count', 1)
+                )
+            except Exception as e:
+                print(f"DEBUG: New field update failed, using old method: {e}")
+                # Fallback to old method without actual_table_name
+                qualitative_repo.update_qualitative_status(
+                    operation_id=operation_id,
+                    status='completed',
+                    output_columns=list(result_df.columns),
+                    execution_time_ms=execution_time_ms,
+                    total_records=analysis_result.get('total_records', len(source_df)),
+                    batch_count=analysis_result.get('batch_count', 1)
+                )
+            
+            return {
+                "status": "completed",
+                "message": "Qualitative data analysis completed successfully",
+                "output_table_name": output_table_name,
+                "total_records_processed": analysis_result.get('total_records', len(source_df)),
+                "analysis_type": operation.analysis_type,
+                "execution_time_ms": execution_time_ms,
+                "batch_count": analysis_result.get('batch_count', 1)
+            }
+            
+        except Exception as e:
+            # Update status to failed
+            qualitative_repo.update_qualitative_status(
+                operation_id=operation_id,
+                status='failed',
+                error_message=str(e)
+            )
+            raise Exception(f"Analysis failed: {str(e)}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/projects/{project_id}/qualitative-data/{operation_id}/data")
+async def get_qualitative_data_results(
+    project_id: int, 
+    operation_id: int, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Get results from a qualitative data analysis operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        qualitative_repo = QualitativeDataRepository(db)
+        
+        # Get operation
+        operation = qualitative_repo.get_qualitative_operation_by_id(operation_id)
+        if not operation or operation.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Qualitative data operation not found")
+        
+        if operation.status != 'completed':
+            raise HTTPException(status_code=400, detail="Operation not completed yet")
+        
+        # Use actual_table_name if available, otherwise fall back to output_table_name
+        table_name = getattr(operation, 'actual_table_name', None) or operation.output_table_name
+        if not table_name:
+            raise HTTPException(status_code=404, detail="No output data available")
+        
+        # Load data from warehouse
+        try:
+            df = pd.read_sql_table(table_name, engine)
+            
+            print(f"DEBUG: Loaded qualitative data table '{table_name}'")
+            print(f"DEBUG: DataFrame shape: {df.shape}")
+            print(f"DEBUG: DataFrame columns: {df.columns.tolist()}")
+            print(f"DEBUG: First few rows:\n{df.head()}")
+            
+            # Convert DataFrame to the format expected by DataViewer (same as AI transformations)
+            columns = df.columns.tolist()
+            data_rows = []
+            
+            # Convert DataFrame rows to list of lists, handling various data types
+            for _, row in df.iterrows():
+                row_data = []
+                for value in row:
+                    if pd.isna(value):
+                        row_data.append(None)
+                    elif isinstance(value, (int, float)):
+                        row_data.append(value)
+                    else:
+                        row_data.append(str(value))
+                data_rows.append(row_data)
+            
+            print(f"DEBUG: Converted to {len(data_rows)} data rows")
+            if data_rows:
+                print(f"DEBUG: First row: {data_rows[0]}")
+            
+            return {
+                "columns": columns,
+                "data": data_rows,
+                "total_rows": len(data_rows),
+                "table_name": operation.output_table_name or getattr(operation, 'actual_table_name', None) or table_name,
+                "analysis_type": operation.analysis_type,
+                "operation_name": operation.name
+            }
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to load results: {str(e)}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/projects/{project_id}/qualitative-data/{operation_id}")
+async def delete_qualitative_data_operation(
+    project_id: int, 
+    operation_id: int, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Delete a qualitative data operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        qualitative_repo = QualitativeDataRepository(db)
+        operation = qualitative_repo.get_qualitative_operation_by_id(operation_id)
+        
+        if not operation or operation.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Qualitative data operation not found")
+        
+        # Delete output table if it exists
+        if operation.output_table_name:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f"DROP TABLE IF EXISTS {operation.output_table_name}"))
+                    conn.commit()
+            except Exception:
+                pass  # Ignore errors dropping table
+        
+        # Delete operation
+        success = qualitative_repo.delete_qualitative_operation(operation_id)
+        if success:
+            return {"status": "deleted", "message": "Qualitative data operation deleted successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="Qualitative data operation not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Project Charts endpoints
 @app.get("/projects/{project_id}/charts")
 async def get_project_charts(project_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -2713,6 +3253,33 @@ async def delete_project(project_id: int, current_user: User = Depends(get_curre
                     print(f"Warning: Failed to drop join table {join.output_table_name}: {e}")
             
             join_repo.delete_join(join.id)
+        
+        # Delete qualitative data operations and their output tables
+        qualitative_repo = QualitativeDataRepository(db)
+        qualitative_operations = qualitative_repo.get_qualitative_operations_by_project(project_id)
+        for operation in qualitative_operations:
+            # Delete output table if it exists
+            if operation.output_table_name:
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text(f"DROP TABLE IF EXISTS {operation.output_table_name}"))
+                        conn.commit()
+                except Exception as e:
+                    print(f"Warning: Failed to drop qualitative table {operation.output_table_name}: {e}")
+            
+            qualitative_repo.delete_qualitative_operation(operation.id)
+        
+        # Delete canvas layout data (nodes and connections)
+        canvas_nodes = db.query(CanvasNode).filter(CanvasNode.project_id == project_id).all()
+        for node in canvas_nodes:
+            db.delete(node)
+        
+        canvas_connections = db.query(CanvasConnection).filter(CanvasConnection.project_id == project_id).all()
+        for connection in canvas_connections:
+            db.delete(connection)
+        
+        # Commit all deletions so far
+        db.commit()
 
         # Delete project charts (cascade handled by database relationship)
         chart_repo = ChartRepository(db)

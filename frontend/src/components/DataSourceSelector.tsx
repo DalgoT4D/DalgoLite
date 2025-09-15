@@ -51,7 +51,7 @@ export default function DataSourceSelector({
         if (projectResponse.ok) {
           const project = await projectResponse.json()
           
-          const sheetsResponse = await fetch(getApiUrl('/sheets/connected')))
+          const sheetsResponse = await fetch(getApiUrl('/sheets/connected'))
           if (sheetsResponse.ok) {
             const sheetsData = await sheetsResponse.json()
             const projectSheets = sheetsData.sheets.filter((sheet: any) => 

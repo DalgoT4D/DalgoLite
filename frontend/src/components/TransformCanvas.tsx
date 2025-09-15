@@ -16,21 +16,41 @@ import ReactFlow, {
   EdgeTypes,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
-import { Plus, Play, Save, Zap, X, ChevronDown, Loader2 } from 'lucide-react'
+import { Plus, Play, Save, Zap, X, ChevronDown, Loader2, Brain } from 'lucide-react'
 
 import SheetNode from './SheetNode'
 import TransformationNode from './TransformationNode'
 import JoinNode from './JoinNode'
+import QualitativeDataNode from './QualitativeDataNode'
 import DataViewer from './DataViewer'
 import ContextMenu from './ContextMenu'
 import JoinModal from './JoinModal'
+import QualitativeDataModal from './QualitativeDataModal'
 import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
+
+// Type definitions
+interface QualitativeDataOperation {
+  id: number
+  name: string
+  source_table_id: number
+  source_table_type: string
+  qualitative_column: string
+  analysis_type: string
+  aggregation_column?: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  error_message?: string
+  output_table_name?: string
+  total_records_processed?: number
+  batch_count?: number
+  execution_time_ms?: number
+}
 
 // Define custom node types
 const nodeTypes: NodeTypes = {
   sheetNode: SheetNode,
   transformationNode: TransformationNode,
   joinNode: JoinNode,
+  qualitativeDataNode: QualitativeDataNode,
 }
 
 interface TransformCanvasProps {
@@ -56,6 +76,21 @@ interface TransformCanvasProps {
     canvas_position: { x: number; y: number }
   }>
   joins: Array<any>
+  qualitativeDataOperations?: Array<{
+    id: number
+    name: string
+    source_table_id: number
+    source_table_type: string
+    qualitative_column: string
+    analysis_type: string
+    status: 'pending' | 'running' | 'completed' | 'failed'
+    error_message?: string
+    output_table_name?: string
+    total_records_processed?: number
+    batch_count?: number
+    execution_time_ms?: number
+    canvas_position: { x: number; y: number }
+  }>
   onCreateTransformationStep: (stepData: {
     step_name: string
     user_prompt: string
@@ -69,6 +104,7 @@ interface TransformCanvasProps {
   onExecuteAll?: () => Promise<void>
   onDeleteTransformationStep?: (stepId: number) => Promise<void>
   onJoinCreated?: () => Promise<void>
+  onQualitativeDataCreated?: () => Promise<void>
 }
 
 export default function TransformCanvas({
@@ -76,12 +112,14 @@ export default function TransformCanvas({
   sheets,
   transformationSteps,
   joins,
+  qualitativeDataOperations = [],
   onCreateTransformationStep,
   onUpdateTransformationStep,
   onExecuteStep,
   onExecuteAll,
   onDeleteTransformationStep,
   onJoinCreated,
+  onQualitativeDataCreated,
 }: TransformCanvasProps) {
   const [nodes, setNodes, onNodesChangeOriginal] = useNodesState([])
   const [edges, setEdges, onEdgesChangeOriginal] = useEdgesState([])
@@ -115,6 +153,11 @@ export default function TransformCanvas({
   // Join modal state
   const [showJoinModal, setShowJoinModal] = useState(false)
   const [joinModalPosition, setJoinModalPosition] = useState({ x: 0, y: 0 })
+  
+  // Qualitative Data modal state
+  const [showQualitativeModal, setShowQualitativeModal] = useState(false)
+  const [qualitativeModalPosition, setQualitativeModalPosition] = useState({ x: 0, y: 0 })
+  const [editingQualitativeOperation, setEditingQualitativeOperation] = useState<QualitativeDataOperation | null>(null)
   
   // AI Transformation modal drag state
   const [isTransformModalDragging, setIsTransformModalDragging] = useState(false)
@@ -559,6 +602,150 @@ export default function TransformCanvas({
         console.error('Error loading joins:', error)
       }
 
+      // Add qualitative data nodes
+      qualitativeDataOperations.forEach((operation) => {
+        const savedNode = savedLayout?.nodes?.find((n: any) => n.id === `qualitative-${operation.id}`)
+        const position = savedNode?.position || operation.canvas_position || { x: 600, y: 300 }
+        
+        initialNodes.push({
+          id: `qualitative-${operation.id}`,
+          type: 'qualitativeDataNode',
+          position,
+          data: {
+            operation,
+            availableTables: qualitativeAvailableTables,
+            onViewData: (operationId: number, operationName: string) => {
+              setDataViewerSource({
+                id: `qualitative-${operationId}`,
+                type: 'qualitative',
+                name: `${operationName} Output`
+              })
+              setDataViewerOpen(true)
+            },
+            onEdit: (operationId: number) => {
+              // Find the operation to edit
+              const operationToEdit = qualitativeDataOperations.find(op => op.id === operationId)
+              console.log('DEBUG: Edit operation found:', operationToEdit)
+              if (operationToEdit) {
+                setEditingQualitativeOperation(operationToEdit)
+                setShowQualitativeModal(true)
+              }
+            },
+            onDelete: async (operationId: number) => {
+              if (window.confirm('Are you sure you want to delete this qualitative analysis? This action cannot be undone.')) {
+                try {
+                  const deleteResponse = await fetch(getApiUrl(`/projects/${projectId}/qualitative-data/${operationId}`), {
+                    method: 'DELETE',
+                  })
+                  
+                  if (deleteResponse.ok) {
+                    setNodes(nodes => nodes.filter(node => node.id !== `qualitative-${operationId}`))
+                    setHasUnsavedChanges(true)
+                  } else {
+                    alert('Failed to delete qualitative analysis. Please try again.')
+                  }
+                } catch (error) {
+                  console.error('Error deleting qualitative analysis:', error)
+                  alert('Failed to delete qualitative analysis. Please try again.')
+                }
+              }
+            },
+            onExecute: async (operationId: number) => {
+              try {
+                setNodes(nodes => nodes.map(node => {
+                  if (node.id === `qualitative-${operationId}`) {
+                    return {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        operation: {
+                          ...node.data.operation,
+                          status: 'running'
+                        }
+                      }
+                    }
+                  }
+                  return node
+                }))
+
+                const executeResponse = await fetch(getApiUrl(`/projects/${projectId}/qualitative-data/${operationId}/execute`), {
+                  method: 'POST',
+                })
+                
+                if (executeResponse.ok) {
+                  const result = await executeResponse.json()
+                  
+                  setNodes(nodes => nodes.map(node => {
+                    if (node.id === `qualitative-${operationId}`) {
+                      return {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          operation: {
+                            ...node.data.operation,
+                            status: 'completed',
+                            output_table_name: result.output_table_name,
+                            total_records_processed: result.total_records_processed,
+                            batch_count: result.batch_count,
+                            execution_time_ms: result.execution_time_ms,
+                            error_message: undefined  // Clear any previous error messages
+                          }
+                        }
+                      }
+                    }
+                    return node
+                  }))
+                  
+                  alert(`Qualitative analysis completed successfully! Processed ${result.total_records_processed} records in ${(result.execution_time_ms / 1000).toFixed(1)}s`)
+                } else {
+                  const error = await executeResponse.json()
+                  
+                  setNodes(nodes => nodes.map(node => {
+                    if (node.id === `qualitative-${operationId}`) {
+                      return {
+                        ...node,
+                        data: {
+                          ...node.data,
+                          operation: {
+                            ...node.data.operation,
+                            status: 'failed',
+                            error_message: error.detail || 'Qualitative analysis failed'
+                          }
+                        }
+                      }
+                    }
+                    return node
+                  }))
+                  
+                  alert(`Failed to execute qualitative analysis: ${error.detail}`)
+                }
+              } catch (error) {
+                console.error('Error executing qualitative analysis:', error)
+                
+                setNodes(nodes => nodes.map(node => {
+                  if (node.id === `qualitative-${operationId}`) {
+                    return {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        operation: {
+                          ...node.data.operation,
+                          status: 'failed',
+                          error_message: error instanceof Error ? error.message : 'Qualitative analysis failed'
+                        }
+                      }
+                    }
+                  }
+                  return node
+                }))
+                
+                alert('Failed to execute qualitative analysis. Please try again.')
+              }
+            }
+          }
+        })
+      })
+
     // Only update nodes if there's a meaningful difference, but preserve positions
     setNodes(prevNodes => {
       const hasChanges = prevNodes.length !== initialNodes.length ||
@@ -589,8 +776,7 @@ export default function TransformCanvas({
               position: existingNode.position,
               width: existingNode.width,
               height: existingNode.height,
-              style: existingNode.style,
-              measured: existingNode.measured
+              style: existingNode.style
             }
           }
           return newNode
@@ -602,7 +788,7 @@ export default function TransformCanvas({
     }
     
     initializeCanvas()
-  }, [sheets, transformationSteps, onUpdateTransformationStep, onExecuteStep, projectId, setEdges])
+  }, [sheets, transformationSteps, qualitativeDataOperations, onUpdateTransformationStep, onExecuteStep, projectId, setEdges])
 
   const onConnect = useCallback(
     (params: Connection) => {
@@ -735,16 +921,6 @@ export default function TransformCanvas({
     [onUpdateTransformationStep, saveCanvasLayout]
   )
 
-  const onNodeResizeStop = useCallback(
-    (event: React.MouseEvent, node: Node) => {
-      // Save layout immediately after resize
-      setHasUnsavedChanges(true)
-      setTimeout(() => {
-        saveCanvasLayout()
-      }, 100)
-    },
-    [saveCanvasLayout]
-  )
 
   // Context menu handlers
   const handlePaneContextMenu = useCallback((event: React.MouseEvent) => {
@@ -807,13 +983,13 @@ export default function TransformCanvas({
     const handleClickOutside = (event: MouseEvent) => {
       if (showCreateDropdown) {
         const dropdown = document.querySelector('.create-dropdown')
-        if (dropdown && !dropdown.contains(event.target as Node)) {
+        if (dropdown && !dropdown.contains(event.target as Element)) {
           setShowCreateDropdown(false)
         }
       }
       if (contextMenu) {
         const contextMenuElement = document.querySelector('.context-menu')
-        if (contextMenuElement && !contextMenuElement.contains(event.target as Node)) {
+        if (contextMenuElement && !contextMenuElement.contains(event.target as Element)) {
           setContextMenu(null)
         }
       }
@@ -838,6 +1014,21 @@ export default function TransformCanvas({
     }
   }, [contextMenu])
 
+  const handleCreateQualitativeData = useCallback(() => {
+    if (contextMenu) {
+      // Convert screen coordinates to canvas coordinates
+      const canvasRect = document.querySelector('.react-flow')?.getBoundingClientRect()
+      if (canvasRect) {
+        const canvasX = contextMenu.x - canvasRect.left - 100
+        const canvasY = contextMenu.y - canvasRect.top - 50
+        setQualitativeModalPosition({ x: Math.max(0, canvasX), y: Math.max(0, canvasY) })
+      } else {
+        setQualitativeModalPosition({ x: 200, y: 200 })
+      }
+      setShowQualitativeModal(true)
+    }
+  }, [contextMenu])
+
   // Available tables for join (sheets + completed transformations + completed joins)
   const availableTables = useMemo(() => {
     const tables = [
@@ -845,7 +1036,8 @@ export default function TransformCanvas({
       ...sheets.map(sheet => ({
         id: sheet.id,
         name: sheet.title,
-        columns: sheet.columns
+        columns: sheet.columns,
+        type: 'sheet' as const
       })),
       // Add completed transformation steps as available tables
       ...transformationSteps
@@ -853,7 +1045,8 @@ export default function TransformCanvas({
         .map(step => ({
           id: step.id + 10000, // Offset to avoid conflicts with sheet IDs
           name: step.step_name,
-          columns: step.output_columns || []
+          columns: step.output_columns || [],
+          type: 'transformation' as const
         })),
       // Add completed joins as available tables
       ...joins
@@ -861,11 +1054,35 @@ export default function TransformCanvas({
         .map(join => ({
           id: join.id + 20000, // Offset to avoid conflicts with sheet and transformation IDs
           name: join.output_table_name || join.name,
-          columns: [] // Join columns would need to be fetched from backend if needed
+          columns: [], // Join columns would need to be fetched from backend if needed
+          type: 'transformation' as const // Treat joins as transformations for the UI
         }))
     ]
     return tables
   }, [sheets, transformationSteps, joins])
+
+  // Available tables for qualitative analysis (only sheets and transformations, not joins)
+  const qualitativeAvailableTables = useMemo(() => {
+    const tables = [
+      // Add sheets as available tables
+      ...sheets.map(sheet => ({
+        id: sheet.id,
+        name: sheet.title,
+        columns: sheet.columns,
+        type: 'sheet' as const
+      })),
+      // Add completed transformation steps as available tables
+      ...transformationSteps
+        .filter(step => step.status === 'completed')
+        .map(step => ({
+          id: step.id,
+          name: step.step_name,
+          columns: step.output_columns || [],
+          type: 'transformation' as const
+        }))
+    ]
+    return tables
+  }, [sheets, transformationSteps])
 
   const handleCreateJoinSubmit = useCallback(async (joinConfig: {
     name: string
@@ -1153,6 +1370,301 @@ export default function TransformCanvas({
     }
   }, [joinModalPosition, availableTables, projectId])
 
+  const handleCreateQualitativeDataSubmit = useCallback(async (operationConfig: {
+    name: string
+    source_table_id: number
+    source_table_type: 'sheet' | 'transformation'
+    qualitative_column: string
+    analysis_type: 'sentiment' | 'summarization'
+    aggregation_column?: string
+    output_table_name?: string
+  }) => {
+    try {
+      // Create qualitative data operation via backend API
+      const response = await fetch(getApiUrl(`/projects/${projectId}/qualitative-data`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          project_id: projectId,
+          name: operationConfig.name,
+          source_table_id: operationConfig.source_table_id,
+          source_table_type: operationConfig.source_table_type,
+          qualitative_column: operationConfig.qualitative_column,
+          analysis_type: operationConfig.analysis_type,
+          aggregation_column: operationConfig.aggregation_column,
+          canvas_position: qualitativeModalPosition,
+          output_table_name: operationConfig.output_table_name
+        }),
+      })
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to create qualitative analysis'
+        try {
+          const error = await response.json()
+          if (error.detail) {
+            errorMessage = Array.isArray(error.detail)
+              ? error.detail.map(d => typeof d === 'object' ? d.msg || JSON.stringify(d) : d).join(', ')
+              : error.detail
+          } else if (error.message) {
+            errorMessage = error.message
+          }
+        } catch (e) {
+          errorMessage = `HTTP ${response.status} ${response.statusText}`
+        }
+        throw new Error(errorMessage)
+      }
+
+      const result = await response.json()
+      
+      // Create a new qualitative data node
+      const newQualitativeNode: Node = {
+        id: `qualitative-${result.operation_id}`,
+        type: 'qualitativeDataNode',
+        position: qualitativeModalPosition,
+        data: {
+          operation: {
+            id: result.operation_id,
+            name: operationConfig.name,
+            source_table_id: operationConfig.source_table_id,
+            source_table_type: operationConfig.source_table_type,
+            qualitative_column: operationConfig.qualitative_column,
+            analysis_type: operationConfig.analysis_type,
+            status: 'pending' as const,
+            canvas_position: qualitativeModalPosition
+          },
+          onViewData: (operationId: number, operationName: string) => {
+            setDataViewerSource({
+              id: `qualitative-${operationId}`,
+              type: 'qualitative',
+              name: `${operationName} Output`
+            })
+            setDataViewerOpen(true)
+          },
+          onEdit: (operationId: number) => {
+            console.log('Edit qualitative operation:', operationId)
+          },
+          onDelete: async (operationId: number) => {
+            if (window.confirm('Are you sure you want to delete this qualitative analysis? This action cannot be undone.')) {
+              try {
+                const deleteResponse = await fetch(getApiUrl(`/projects/${projectId}/qualitative-data/${operationId}`), {
+                  method: 'DELETE',
+                })
+                
+                if (deleteResponse.ok) {
+                  setNodes(nodes => nodes.filter(node => node.id !== `qualitative-${operationId}`))
+                  setHasUnsavedChanges(true)
+                } else {
+                  alert('Failed to delete qualitative analysis. Please try again.')
+                }
+              } catch (error) {
+                console.error('Error deleting qualitative analysis:', error)
+                alert('Failed to delete qualitative analysis. Please try again.')
+              }
+            }
+          },
+          onExecute: async (operationId: number) => {
+            try {
+              setNodes(nodes => nodes.map(node => {
+                if (node.id === `qualitative-${operationId}`) {
+                  return {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      operation: {
+                        ...node.data.operation,
+                        status: 'running'
+                      }
+                    }
+                  }
+                }
+                return node
+              }))
+
+              const executeResponse = await fetch(getApiUrl(`/projects/${projectId}/qualitative-data/${operationId}/execute`), {
+                method: 'POST',
+              })
+              
+              if (executeResponse.ok) {
+                const result = await executeResponse.json()
+                
+                setNodes(nodes => nodes.map(node => {
+                  if (node.id === `qualitative-${operationId}`) {
+                    return {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        operation: {
+                          ...node.data.operation,
+                          status: 'completed',
+                          output_table_name: result.output_table_name,
+                          total_records_processed: result.total_records_processed,
+                          batch_count: result.batch_count,
+                          execution_time_ms: result.execution_time_ms,
+                          error_message: undefined  // Clear any previous error messages
+                        }
+                      }
+                    }
+                  }
+                  return node
+                }))
+                
+                alert(`Qualitative analysis completed successfully! Processed ${result.total_records_processed} records in ${(result.execution_time_ms / 1000).toFixed(1)}s`)
+              } else {
+                const error = await executeResponse.json()
+                
+                setNodes(nodes => nodes.map(node => {
+                  if (node.id === `qualitative-${operationId}`) {
+                    return {
+                      ...node,
+                      data: {
+                        ...node.data,
+                        operation: {
+                          ...node.data.operation,
+                          status: 'failed',
+                          error_message: error.detail || 'Qualitative analysis failed'
+                        }
+                      }
+                    }
+                  }
+                  return node
+                }))
+                
+                alert(`Failed to execute qualitative analysis: ${error.detail}`)
+              }
+            } catch (error) {
+              console.error('Error executing qualitative analysis:', error)
+              
+              setNodes(nodes => nodes.map(node => {
+                if (node.id === `qualitative-${operationId}`) {
+                  return {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      operation: {
+                        ...node.data.operation,
+                        status: 'failed',
+                        error_message: error instanceof Error ? error.message : 'Qualitative analysis failed'
+                      }
+                    }
+                  }
+                }
+                return node
+              }))
+              
+              alert('Failed to execute qualitative analysis. Please try again.')
+            }
+          }
+        }
+      }
+
+      // Add the node to the canvas
+      setNodes(nodes => [...nodes, newQualitativeNode])
+      setHasUnsavedChanges(true)
+      
+      // Notify parent component about the new qualitative operation
+      if (onQualitativeDataCreated) {
+        await onQualitativeDataCreated()
+      }
+      
+    } catch (error) {
+      console.error('Error creating qualitative data operation:', error)
+      let errorMessage = 'An unexpected error occurred'
+      if (error instanceof Error) {
+        errorMessage = error.message
+      }
+      alert(`Failed to create qualitative analysis: ${errorMessage}`)
+    }
+  }, [qualitativeModalPosition, projectId, onQualitativeDataCreated])
+
+  // Handle updating qualitative data operations
+  const handleUpdateQualitativeDataSubmit = useCallback(async (operationConfig: {
+    name: string
+    source_table_id: number
+    source_table_type: 'sheet' | 'transformation'
+    qualitative_column: string
+    analysis_type: 'sentiment' | 'summarization'
+    aggregation_column?: string
+    output_table_name?: string
+  }) => {
+    if (!editingQualitativeOperation) return
+
+    try {
+      // Update qualitative data operation via backend API
+      const response = await fetch(getApiUrl(`/projects/${projectId}/qualitative-data/${editingQualitativeOperation.id}`), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: operationConfig.name,
+          source_table_id: operationConfig.source_table_id,
+          source_table_type: operationConfig.source_table_type,
+          qualitative_column: operationConfig.qualitative_column,
+          analysis_type: operationConfig.analysis_type,
+          aggregation_column: operationConfig.aggregation_column,
+          output_table_name: operationConfig.output_table_name
+        }),
+      })
+
+      if (!response.ok) {
+        let errorMessage = 'Failed to update qualitative analysis'
+        try {
+          const errorData = await response.json()
+          if (errorData.detail) {
+            errorMessage = errorData.detail
+          }
+        } catch {
+          // If we can't parse the error, use the status text
+          errorMessage = `Failed to update qualitative analysis: ${response.statusText}`
+        }
+        throw new Error(errorMessage)
+      }
+
+      // Update the node in the canvas
+      setNodes(nodes => nodes.map(node => {
+        if (node.id === `qualitative-${editingQualitativeOperation.id}`) {
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              operation: {
+                ...node.data.operation,
+                name: operationConfig.name,
+                source_table_id: operationConfig.source_table_id,
+                source_table_type: operationConfig.source_table_type,
+                qualitative_column: operationConfig.qualitative_column,
+                analysis_type: operationConfig.analysis_type,
+                output_table_name: operationConfig.output_table_name
+              }
+            }
+          }
+        }
+        return node
+      }))
+      
+      setHasUnsavedChanges(true)
+      
+      // Notify parent component about the updated qualitative operation
+      if (onQualitativeDataCreated) {
+        await onQualitativeDataCreated()
+      }
+      
+      // Close modal
+      setShowQualitativeModal(false)
+      setEditingQualitativeOperation(null)
+      
+    } catch (error) {
+      console.error('Error updating qualitative data operation:', error)
+      let errorMessage = 'An unexpected error occurred'
+      if (error instanceof Error) {
+        errorMessage = error.message
+      }
+      alert(`Failed to update qualitative analysis: ${errorMessage}`)
+    }
+  }, [editingQualitativeOperation, projectId, onQualitativeDataCreated])
+
   return (
     <div className="h-full w-full relative">
       <ReactFlow
@@ -1164,7 +1676,6 @@ export default function TransformCanvas({
         onPaneClick={onPaneClick}
         onPaneContextMenu={handlePaneContextMenu}
         onNodeDragStop={onNodeDragStop}
-        onNodeResizeStop={onNodeResizeStop}
         nodeTypes={nodeTypes}
         className="bg-gray-50"
         minZoom={0.2}
@@ -1179,6 +1690,10 @@ export default function TransformCanvas({
                 return '#3B82F6'
               case 'transformationNode':
                 return '#10B981'
+              case 'joinNode':
+                return '#8B5CF6'
+              case 'qualitativeDataNode':
+                return '#A855F7'
               default:
                 return '#6B7280'
             }
@@ -1250,12 +1765,34 @@ export default function TransformCanvas({
                   }
                   setShowJoinModal(true)
                 }}
-                className="w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center gap-3"
+                className="w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center gap-3 border-b border-gray-100"
               >
                 <Plus size={16} className="text-blue-600" />
                 <div>
                   <div className="font-medium text-gray-900">Join Tables</div>
                   <div className="text-xs text-gray-500">Combine data from multiple sources</div>
+                </div>
+              </button>
+              
+              <button
+                onClick={() => {
+                  setShowCreateDropdown(false)
+                  const canvasRect = document.querySelector('.react-flow')?.getBoundingClientRect()
+                  if (canvasRect) {
+                    const canvasX = window.innerWidth / 2 - canvasRect.left - 100
+                    const canvasY = window.innerHeight / 2 - canvasRect.top - 50
+                    setQualitativeModalPosition({ x: Math.max(0, canvasX), y: Math.max(0, canvasY) })
+                  } else {
+                    setQualitativeModalPosition({ x: 200, y: 200 })
+                  }
+                  setShowQualitativeModal(true)
+                }}
+                className="w-full text-left px-4 py-3 hover:bg-gray-50 flex items-center gap-3"
+              >
+                <Brain size={16} className="text-purple-600" />
+                <div>
+                  <div className="font-medium text-gray-900">Qualitative Analysis</div>
+                  <div className="text-xs text-gray-500">Analyze text data with AI sentiment & summarization</div>
                 </div>
               </button>
             </div>
@@ -1292,6 +1829,7 @@ export default function TransformCanvas({
           onClose={handleCloseContextMenu}
           onCreateAITransformation={handleCreateAITransformation}
           onCreateJoin={handleCreateJoin}
+          onCreateQualitativeData={handleCreateQualitativeData}
         />
       )}
 
@@ -1513,6 +2051,19 @@ export default function TransformCanvas({
         onCreateJoin={handleCreateJoinSubmit}
         position={joinModalPosition}
         availableTables={availableTables}
+      />
+
+      {/* Qualitative Data Modal */}
+      <QualitativeDataModal
+        isOpen={showQualitativeModal}
+        onClose={() => {
+          setShowQualitativeModal(false)
+          setEditingQualitativeOperation(null)
+        }}
+        onCreateOperation={editingQualitativeOperation ? handleUpdateQualitativeDataSubmit : handleCreateQualitativeDataSubmit}
+        position={qualitativeModalPosition}
+        availableTables={qualitativeAvailableTables}
+        initialOperation={editingQualitativeOperation}
       />
     </div>
   )

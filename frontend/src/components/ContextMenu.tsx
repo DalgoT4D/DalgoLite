@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useEffect, useRef } from 'react'
-import { Zap, Link } from 'lucide-react'
+import { Zap, Link, Brain } from 'lucide-react'
 
 interface ContextMenuProps {
   x: number
@@ -9,6 +9,7 @@ interface ContextMenuProps {
   onClose: () => void
   onCreateAITransformation: () => void
   onCreateJoin: () => void
+  onCreateQualitativeData: () => void
 }
 
 export default function ContextMenu({ 
@@ -16,13 +17,14 @@ export default function ContextMenu({
   y, 
   onClose, 
   onCreateAITransformation, 
-  onCreateJoin 
+  onCreateJoin,
+  onCreateQualitativeData 
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Element)) {
         onClose()
       }
     }
@@ -60,6 +62,15 @@ export default function ContextMenu({
         onClose()
       },
       description: 'Join two or more datasets together'
+    },
+    {
+      label: 'Create Qualitative Analysis',
+      icon: Brain,
+      onClick: () => {
+        onCreateQualitativeData()
+        onClose()
+      },
+      description: 'Analyze text data with AI sentiment & summarization'
     }
   ]
 

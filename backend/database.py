@@ -230,6 +230,34 @@ class PipelineExecutionHistory(Base):
     # Relationships
     project = relationship("TransformationProject")
 
+class QualitativeDataOperation(Base):
+    __tablename__ = "qualitative_data_operations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("transformation_projects.id"), nullable=False)
+    name = Column(String, nullable=False)
+    source_table_id = Column(Integer, nullable=False)  # Sheet or transformation step ID
+    source_table_type = Column(String, nullable=False)  # 'sheet' or 'transformation'
+    qualitative_column = Column(String, nullable=False)  # Column containing qualitative data
+    analysis_type = Column(String, nullable=False)  # 'sentiment' or 'summarization'
+    aggregation_column = Column(String)  # Optional column for group-by summarization
+    status = Column(String, default='pending')  # 'pending', 'running', 'completed', 'failed'
+    error_message = Column(Text)
+    output_table_name = Column(String)  # User-configured custom table name
+    actual_table_name = Column(String)  # Actual database table name (auto-generated)
+    output_columns = Column(JSON)  # Resulting columns after analysis
+    canvas_position = Column(JSON)  # Position on canvas (x, y coordinates)
+    execution_time_ms = Column(Integer)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    # Analysis results (for completed operations)
+    total_records_processed = Column(Integer)
+    batch_count = Column(Integer)
+    
+    # Relationships
+    project = relationship("TransformationProject")
+
 # Database migration utilities
 def migrate_database():
     """Handle database schema migrations safely"""
@@ -377,6 +405,26 @@ def migrate_database():
                     conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}"))
                 conn.commit()
             print("Users table columns added successfully")
+
+    # Check if we need to migrate qualitative_data_operations table
+    if 'qualitative_data_operations' in existing_tables:
+        existing_columns = [col['name'] for col in inspector.get_columns('qualitative_data_operations')]
+        
+        # Add actual_table_name column if it doesn't exist
+        if 'actual_table_name' not in existing_columns:
+            print("Adding actual_table_name column to qualitative_data_operations table...")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE qualitative_data_operations ADD COLUMN actual_table_name TEXT"))
+                conn.commit()
+            print("Qualitative data operations table migration completed successfully")
+        
+        # Add aggregation_column if it doesn't exist
+        if 'aggregation_column' not in existing_columns:
+            print("Adding aggregation_column to qualitative_data_operations table...")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE qualitative_data_operations ADD COLUMN aggregation_column TEXT"))
+                conn.commit()
+            print("Aggregation column migration completed successfully")
 
     # Create any new tables
     Base.metadata.create_all(bind=engine)
@@ -657,6 +705,99 @@ class JoinRepository:
         join_op = self.get_join_by_id(join_id)
         if join_op:
             self.db.delete(join_op)
+            self.db.commit()
+            return True
+        return False
+
+class QualitativeDataRepository:
+    def __init__(self, db: Session):
+        self.db = db
+    
+    def create_qualitative_operation(self, project_id: int, name: str, source_table_id: int,
+                                   source_table_type: str, qualitative_column: str, 
+                                   analysis_type: str, canvas_position: Optional[Dict] = None,
+                                   output_table_name: Optional[str] = None,
+                                   aggregation_column: Optional[str] = None) -> QualitativeDataOperation:
+        qualitative_op = QualitativeDataOperation(
+            project_id=project_id,
+            name=name,
+            source_table_id=source_table_id,
+            source_table_type=source_table_type,
+            qualitative_column=qualitative_column,
+            analysis_type=analysis_type,
+            aggregation_column=aggregation_column,
+            canvas_position=canvas_position or {"x": 0, "y": 0},
+            status='pending',
+            output_table_name=output_table_name
+        )
+        self.db.add(qualitative_op)
+        self.db.commit()
+        self.db.refresh(qualitative_op)
+        return qualitative_op
+    
+    def get_qualitative_operations_by_project(self, project_id: int) -> List[QualitativeDataOperation]:
+        return self.db.query(QualitativeDataOperation).filter(
+            QualitativeDataOperation.project_id == project_id
+        ).order_by(QualitativeDataOperation.created_at.desc()).all()
+    
+    def get_qualitative_operation_by_id(self, operation_id: int) -> Optional[QualitativeDataOperation]:
+        return self.db.query(QualitativeDataOperation).filter(
+            QualitativeDataOperation.id == operation_id
+        ).first()
+    
+    def update_qualitative_status(self, operation_id: int, status: str, error_message: str = None,
+                                output_columns: List[str] = None, execution_time_ms: int = None,
+                                actual_table_name: str = None, total_records: int = None,
+                                batch_count: int = None) -> Optional[QualitativeDataOperation]:
+        qualitative_op = self.get_qualitative_operation_by_id(operation_id)
+        if qualitative_op:
+            qualitative_op.status = status
+            if error_message:
+                qualitative_op.error_message = error_message
+            if output_columns:
+                qualitative_op.output_columns = output_columns
+            if execution_time_ms:
+                qualitative_op.execution_time_ms = execution_time_ms
+            if actual_table_name:
+                # Only set if the field exists
+                if hasattr(qualitative_op, 'actual_table_name'):
+                    qualitative_op.actual_table_name = actual_table_name
+                else:
+                    # Fallback for older database schema
+                    print(f"DEBUG: actual_table_name field not available, skipping")
+            if total_records:
+                qualitative_op.total_records_processed = total_records
+            if batch_count:
+                qualitative_op.batch_count = batch_count
+            qualitative_op.updated_at = datetime.now(timezone.utc)
+            self.db.commit()
+            self.db.refresh(qualitative_op)
+            return qualitative_op
+        return None
+    
+    def update_qualitative_operation(self, operation_id: int, name: str, source_table_id: int,
+                                   source_table_type: str, qualitative_column: str,
+                                   analysis_type: str, aggregation_column: Optional[str] = None,
+                                   output_table_name: Optional[str] = None) -> Optional[QualitativeDataOperation]:
+        qualitative_op = self.get_qualitative_operation_by_id(operation_id)
+        if qualitative_op:
+            qualitative_op.name = name
+            qualitative_op.source_table_id = source_table_id
+            qualitative_op.source_table_type = source_table_type
+            qualitative_op.qualitative_column = qualitative_column
+            qualitative_op.analysis_type = analysis_type
+            qualitative_op.aggregation_column = aggregation_column
+            qualitative_op.output_table_name = output_table_name
+            qualitative_op.updated_at = datetime.now(timezone.utc)
+            
+            self.db.commit()
+            return qualitative_op
+        return None
+    
+    def delete_qualitative_operation(self, operation_id: int) -> bool:
+        qualitative_op = self.get_qualitative_operation_by_id(operation_id)
+        if qualitative_op:
+            self.db.delete(qualitative_op)
             self.db.commit()
             return True
         return False
