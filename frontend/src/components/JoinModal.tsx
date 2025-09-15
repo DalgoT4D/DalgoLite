@@ -228,11 +228,29 @@ export default function JoinModal({
   }) => {
     try {
       console.log('Fetching actual data for validation:', joinConfig)
-      
+
+      // Determine the correct endpoints based on table IDs
+      // IDs >= 20000 are joins, >= 10000 are transformations, < 10000 are sheets
+      const getDataEndpoint = (tableId: number) => {
+        if (tableId >= 20000) {
+          // Join table
+          return `/projects/joins/${tableId - 20000}/data`
+        } else if (tableId >= 10000) {
+          // Transformation table
+          return `/ai-transformations/${tableId - 10000}/data`
+        } else {
+          // Sheet table
+          return `/sheets/${tableId}/data`
+        }
+      }
+
+      const leftEndpoint = getDataEndpoint(joinConfig.leftTable)
+      const rightEndpoint = getDataEndpoint(joinConfig.rightTable)
+
       // Fetch data from both tables
       const [leftResponse, rightResponse] = await Promise.all([
-        fetch(getApiUrl(`/sheets/${joinConfig.leftTable}/data`)),
-        fetch(getApiUrl(`/sheets/${joinConfig.rightTable}/data`))
+        fetch(getApiUrl(leftEndpoint)),
+        fetch(getApiUrl(rightEndpoint))
       ])
 
       if (!leftResponse.ok || !rightResponse.ok) {

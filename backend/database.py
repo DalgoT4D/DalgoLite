@@ -300,8 +300,8 @@ def migrate_database():
                     # Test if we can insert a null sheet_id
                     try:
                         test_insert = text("""
-                            INSERT INTO saved_charts (sheet_id, project_id, chart_name, chart_type, x_axis_column, y_axis_column, chart_config, created_at, updated_at) 
-                            VALUES (NULL, 999, 'test', 'bar', 'test_col', NULL, '{}', datetime('now'), datetime('now'))
+                            INSERT INTO saved_charts (user_id, sheet_id, project_id, chart_name, chart_type, x_axis_column, y_axis_column, chart_config, created_at, updated_at)
+                            VALUES (1, NULL, 999, 'test', 'bar', 'test_col', NULL, '{}', datetime('now'), datetime('now'))
                         """)
                         conn.execute(test_insert)
                         # If successful, remove the test record
@@ -316,6 +316,7 @@ def migrate_database():
                             conn.execute(text("""
                                 CREATE TABLE saved_charts (
                                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    user_id INTEGER NOT NULL,
                                     sheet_id INTEGER,
                                     project_id INTEGER,
                                     chart_name TEXT NOT NULL,
@@ -325,12 +326,13 @@ def migrate_database():
                                     chart_config TEXT,
                                     created_at DATETIME,
                                     updated_at DATETIME,
+                                    FOREIGN KEY (user_id) REFERENCES users(id),
                                     FOREIGN KEY (sheet_id) REFERENCES connected_sheets(id)
                                 )
                             """))
                             conn.execute(text("""
-                                INSERT INTO saved_charts 
-                                SELECT * FROM saved_charts_old
+                                INSERT INTO saved_charts (user_id, sheet_id, project_id, chart_name, chart_type, x_axis_column, y_axis_column, chart_config, created_at, updated_at)
+                                SELECT 1, sheet_id, project_id, chart_name, chart_type, x_axis_column, y_axis_column, chart_config, created_at, updated_at FROM saved_charts_old
                             """))
                             conn.execute(text("DROP TABLE saved_charts_old"))
                             conn.commit()

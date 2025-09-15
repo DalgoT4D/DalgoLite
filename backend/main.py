@@ -831,11 +831,11 @@ async def get_connected_sheets(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/sheets/{sheet_id}")
-async def get_sheet_details(sheet_id: int, db: Session = Depends(get_db)):
+async def get_sheet_details(sheet_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get detailed information about a specific sheet"""
     try:
         sheet_repo = SheetRepository(db)
-        sheet = sheet_repo.get_sheet_by_id(sheet_id)
+        sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
         
         if not sheet:
             raise HTTPException(status_code=404, detail="Sheet not found")
@@ -858,11 +858,11 @@ async def get_sheet_details(sheet_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/sheets/{sheet_id}/sync")
-async def sync_sheet(sheet_id: int, db: Session = Depends(get_db)):
+async def sync_sheet(sheet_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Re-sync a sheet with Google Sheets to get latest data"""
     try:
         sheet_repo = SheetRepository(db)
-        sheet = sheet_repo.get_sheet_by_id(sheet_id)
+        sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
         
         if not sheet:
             raise HTTPException(status_code=404, detail="Sheet not found")
@@ -891,11 +891,11 @@ async def sync_sheet(sheet_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/sheets/{sheet_id}/recommendations")
-async def get_sheet_recommendations(sheet_id: int, db: Session = Depends(get_db)):
+async def get_sheet_recommendations(sheet_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get chart recommendations for a specific sheet"""
     try:
         sheet_repo = SheetRepository(db)
-        sheet = sheet_repo.get_sheet_by_id(sheet_id)
+        sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
         
         if not sheet:
             raise HTTPException(status_code=404, detail="Sheet not found")
@@ -913,11 +913,11 @@ async def get_sheet_recommendations(sheet_id: int, db: Session = Depends(get_db)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/sheets/{sheet_id}/resync")
-async def resync_sheet_data(sheet_id: int, db: Session = Depends(get_db)):
+async def resync_sheet_data(sheet_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Resync data from Google Sheets for an existing connected sheet"""
     try:
         sheet_repo = SheetRepository(db)
-        existing_sheet = sheet_repo.get_sheet_by_id(sheet_id)
+        existing_sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
         
         if not existing_sheet:
             raise HTTPException(status_code=404, detail="Sheet not found")
@@ -999,19 +999,20 @@ async def resync_sheet_data(sheet_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/sheets/{sheet_id}")
-async def delete_sheet(sheet_id: int, db: Session = Depends(get_db)):
+async def delete_sheet(sheet_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Delete a connected sheet and all its charts"""
     try:
-        # Check if sheet exists
+        # Check if sheet exists and belongs to current user
         sheet_repo = SheetRepository(db)
-        sheet = sheet_repo.get_sheet_by_id(sheet_id)
-        
+        sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
+
         if not sheet:
             raise HTTPException(status_code=404, detail="Sheet not found")
-        
-        # Check if sheet is used in any transformation projects
+
+        # Check if sheet is used in any transformation projects (only user's projects)
         project_repo = TransformationProjectRepository(db)
         projects_using_sheet = db.query(TransformationProject).filter(
+            TransformationProject.user_id == current_user.id,
             TransformationProject.sheet_ids.contains([sheet_id])
         ).all()
         
@@ -1023,7 +1024,7 @@ async def delete_sheet(sheet_id: int, db: Session = Depends(get_db)):
             )
         
         # Proceed with deletion if no transformation projects use this sheet
-        success = sheet_repo.delete_sheet(sheet_id)
+        success = sheet_repo.delete_sheet(sheet_id, current_user.id)
         
         if not success:
             raise HTTPException(status_code=500, detail="Failed to delete sheet")
@@ -1205,7 +1206,7 @@ async def get_all_charts(current_user: User = Depends(get_current_user), db: Ses
             
             # Add source metadata
             if chart.sheet_id:
-                sheet = sheet_repo.get_sheet_by_id(chart.sheet_id)
+                sheet = sheet_repo.get_sheet_by_id(chart.sheet_id, current_user.id)
                 if sheet:
                     chart_data.update({
                         "source_type": "sheet",
@@ -1244,11 +1245,9 @@ class UnifiedChartCreateRequest(BaseModel):
     project_id: Optional[int] = None  # Required for transformation/join sources
 
 @app.post("/charts/unified")
-async def create_unified_chart(chart_request: UnifiedChartCreateRequest, db: Session = Depends(get_db)):
+async def create_unified_chart(chart_request: UnifiedChartCreateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Create a chart from any source type (sheet, AI transformation, join)"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
         
         chart_repo = ChartRepository(db)
         
@@ -1258,7 +1257,7 @@ async def create_unified_chart(chart_request: UnifiedChartCreateRequest, db: Ses
         
         if chart_request.source_type == "sheet":
             sheet_repo = SheetRepository(db)
-            sheet = sheet_repo.get_sheet_by_id(chart_request.source_id)
+            sheet = sheet_repo.get_sheet_by_id(chart_request.source_id, current_user.id)
             if not sheet:
                 raise HTTPException(status_code=404, detail="Sheet not found")
             sheet_id = chart_request.source_id
@@ -1289,6 +1288,7 @@ async def create_unified_chart(chart_request: UnifiedChartCreateRequest, db: Ses
         
         # Create chart (unified charts don't need project_id)
         chart_id = chart_repo.create_chart(
+            user_id=current_user.id,
             sheet_id=sheet_id,
             chart_name=chart_request.chart_name,
             chart_type=chart_request.chart_type,
@@ -1309,27 +1309,24 @@ async def create_unified_chart(chart_request: UnifiedChartCreateRequest, db: Ses
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/charts/{chart_id}/data")
-async def get_chart_data(chart_id: int, db: Session = Depends(get_db)):
+async def get_chart_data(chart_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get chart data for visualization"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
         chart_repo = ChartRepository(db)
-        chart = chart_repo.get_chart_by_id(chart_id)
-        
+        chart = chart_repo.get_chart_by_id(current_user.id, chart_id)
+
         if not chart:
             raise HTTPException(status_code=404, detail="Chart not found")
-        
+
         # Get data based on chart source (check config first, then fallback to legacy fields)
         source_type = chart.chart_config.get("source_type")
         source_id = chart.chart_config.get("source_id")
-        
+
         if source_type == "sheet" or chart.sheet_id:
             # Get data from Google Sheet
             sheet_id = source_id or chart.sheet_id
             sheet_repo = SheetRepository(db)
-            sheet = sheet_repo.get_sheet_by_id(sheet_id)
+            sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
             if not sheet:
                 raise HTTPException(status_code=404, detail="Sheet not found")
             
@@ -1586,17 +1583,14 @@ def process_chart_data(data_rows, x_col_idx, y_col_idx, chart_type, chart_config
         }
 
 @app.get("/data-sources")
-async def get_all_data_sources(db: Session = Depends(get_db)):
+async def get_all_data_sources(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get all available data sources (sheets, AI transformations, joins) for chart creation"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
         data_sources = []
-        
-        # Get all connected sheets
+
+        # Get all connected sheets for current user only
         sheet_repo = SheetRepository(db)
-        sheets = sheet_repo.get_all_sheets()
+        sheets = sheet_repo.get_all_sheets(current_user.id)
         
         for sheet in sheets:
             data_sources.append({
@@ -1611,16 +1605,20 @@ async def get_all_data_sources(db: Session = Depends(get_db)):
                 }
             })
         
-        # Get all AI transformation steps
+        # Get all AI transformation steps for user's projects only
+        user_projects = db.query(TransformationProject).filter(
+            TransformationProject.user_id == current_user.id
+        ).all()
+        user_project_ids = [p.id for p in user_projects]
+
         ai_steps = db.query(AITransformationStep).filter(
+            AITransformationStep.project_id.in_(user_project_ids),
             AITransformationStep.status == 'completed'
         ).all()
         
         for step in ai_steps:
-            # Get project info for context
-            project = db.query(TransformationProject).filter(
-                TransformationProject.id == step.project_id
-            ).first()
+            # Get project info for context (already filtered by user)
+            project = next((p for p in user_projects if p.id == step.project_id), None)
             
             data_sources.append({
                 "id": f"transform-{step.id}",
@@ -1636,17 +1634,16 @@ async def get_all_data_sources(db: Session = Depends(get_db)):
                 }
             })
         
-        # Get all completed joins
+        # Get all completed joins for user's projects only
         join_repo = JoinRepository(db)
         joins = db.query(JoinOperation).filter(
+            JoinOperation.project_id.in_(user_project_ids),
             JoinOperation.status == 'completed'
         ).all()
-        
+
         for join in joins:
-            # Get project info for context
-            project = db.query(TransformationProject).filter(
-                TransformationProject.id == join.project_id
-            ).first()
+            # Get project info for context (already filtered by user)
+            project = next((p for p in user_projects if p.id == join.project_id), None)
             
             # Use actual output columns from the completed join
             actual_columns = join.output_columns or []
@@ -1711,7 +1708,7 @@ async def create_project(project_request: ProjectCreateRequest, current_user: Us
         # Validate that all sheet IDs exist and belong to current user
         sheet_repo = SheetRepository(db)
         for sheet_id in project_request.sheet_ids:
-            sheet = sheet_repo.get_sheet_by_id(current_user.id, sheet_id)
+            sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
             if not sheet:
                 raise HTTPException(status_code=400, detail=f"Sheet with ID {sheet_id} not found or not accessible")
 
@@ -1766,18 +1763,16 @@ async def get_project(project_id: int, current_user: User = Depends(get_current_
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/projects/analyze-join")
-async def analyze_join_opportunities(request: JoinAnalysisRequest, db: Session = Depends(get_db)):
+async def analyze_join_opportunities(request: JoinAnalysisRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Analyze sheets for potential join opportunities"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
         
         sheet_repo = SheetRepository(db)
         sheets_data = []
         
         # Get data for all requested sheets
         for sheet_id in request.sheet_ids:
-            sheet = sheet_repo.get_sheet_by_id(sheet_id)
+            sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
             if not sheet:
                 raise HTTPException(status_code=400, detail=f"Sheet with ID {sheet_id} not found")
             sheets_data.append({
@@ -1912,14 +1907,14 @@ def fetch_full_sheet_data(sheet: ConnectedSheet) -> pd.DataFrame:
     return get_warehouse_sheet_data(sheet)
 
 @app.post("/projects/{project_id}/preview-join")
-async def preview_join(project_id: int, join_config: Dict[str, Any], db: Session = Depends(get_db)):
+async def preview_join(project_id: int, join_config: Dict[str, Any], current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Preview the result of joining sheets with specified configuration"""
     try:
         if 'default' not in user_credentials:
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -1930,7 +1925,7 @@ async def preview_join(project_id: int, join_config: Dict[str, Any], db: Session
         sheets_data = {}
         
         for sheet_id in project.sheet_ids:
-            sheet = sheet_repo.get_sheet_by_id(sheet_id)
+            sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
             if sheet:
                 df = fetch_full_sheet_data(sheet)
                 dataframes[sheet_id] = df
@@ -2020,15 +2015,12 @@ async def preview_join(project_id: int, join_config: Dict[str, Any], db: Session
 
 # Join Operation endpoints
 @app.post("/projects/{project_id}/joins")
-async def create_join(project_id: int, request: JoinCreateRequest, db: Session = Depends(get_db)):
+async def create_join(project_id: int, request: JoinCreateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Create a new join operation"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
         # Verify project exists
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
@@ -2037,7 +2029,7 @@ async def create_join(project_id: int, request: JoinCreateRequest, db: Session =
         
         # Validate left table
         if request.left_table_type == 'sheet':
-            left_table = sheet_repo.get_sheet_by_id(request.left_table_id)
+            left_table = sheet_repo.get_sheet_by_id(request.left_table_id, current_user.id)
             if not left_table:
                 raise HTTPException(status_code=404, detail="Left table (sheet) not found")
         elif request.left_table_type == 'transformation':
@@ -2052,7 +2044,7 @@ async def create_join(project_id: int, request: JoinCreateRequest, db: Session =
         
         # Validate right table  
         if request.right_table_type == 'sheet':
-            right_table = sheet_repo.get_sheet_by_id(request.right_table_id)
+            right_table = sheet_repo.get_sheet_by_id(request.right_table_id, current_user.id)
             if not right_table:
                 raise HTTPException(status_code=404, detail="Right table (sheet) not found")
         elif request.right_table_type == 'transformation':
@@ -2134,7 +2126,7 @@ async def update_join(project_id: int, join_id: int, request: JoinCreateRequest,
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/projects/{project_id}/joins")
-async def get_project_joins(project_id: int, db: Session = Depends(get_db)):
+async def get_project_joins(project_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get all join operations for a project"""
     try:
         if 'default' not in user_credentials:
@@ -2142,7 +2134,7 @@ async def get_project_joins(project_id: int, db: Session = Depends(get_db)):
         
         # Verify project exists
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
@@ -2179,11 +2171,9 @@ async def get_project_joins(project_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/projects/{project_id}/joins/{join_id}/execute")
-async def execute_join(project_id: int, join_id: int, db: Session = Depends(get_db)):
+async def execute_join(project_id: int, join_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Execute a join operation"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
         
         import time
         start_time = time.time()
@@ -2203,48 +2193,96 @@ async def execute_join(project_id: int, join_id: int, db: Session = Depends(get_
             
             # Get left table data
             if join_op.left_table_type == 'sheet':
-                left_sheet = sheet_repo.get_sheet_by_id(join_op.left_table_id)
+                left_sheet = sheet_repo.get_sheet_by_id(join_op.left_table_id, current_user.id)
                 if not left_sheet:
                     raise Exception("Left sheet not found")
                 left_df = fetch_full_sheet_data(left_sheet)
                 if left_df is None or left_df.empty:
                     raise Exception("Could not fetch data from left sheet. Please check your Google Sheets authentication.")
             elif join_op.left_table_type == 'transformation':
-                # Get transformation output data
-                left_table_name = f"transform_step_{join_op.left_table_id}"
+                # Get transformation step to find its output table name
+                left_step = db.query(AITransformationStep).filter(
+                    AITransformationStep.id == join_op.left_table_id
+                ).first()
+
+                if not left_step:
+                    raise Exception("Left transformation step not found")
+
+                # Use the custom output_table_name if available
+                if left_step.output_table_name:
+                    left_table_name = left_step.output_table_name
+                else:
+                    # Fallback to default pattern
+                    left_table_name = f"transform_step_{join_op.left_table_id}"
+
                 with engine.connect() as conn:
                     try:
-                        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"), 
-                                            {"pattern": f"%{left_table_name}%"})
-                        table_names = [row[0] for row in result.fetchall()]
-                        if table_names:
-                            left_df = pd.read_sql_table(table_names[0], conn)
+                        # First try exact table name
+                        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name = :name"),
+                                            {"name": left_table_name})
+                        exact_match = result.fetchone()
+
+                        if exact_match:
+                            left_df = pd.read_sql_table(left_table_name, conn)
                         else:
-                            raise Exception("Left transformation output table not found")
+                            # Fallback to pattern matching for legacy tables
+                            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"),
+                                                {"pattern": f"%transform_step_{join_op.left_table_id}%"})
+                            table_names = [row[0] for row in result.fetchall()]
+                            if table_names:
+                                left_df = pd.read_sql_table(table_names[0], conn)
+                            else:
+                                raise Exception(f"Left transformation output table '{left_table_name}' not found. Please execute the transformation '{left_step.step_name}' first.")
                     except Exception as e:
+                        if "not found" in str(e).lower() or "no such table" in str(e).lower():
+                            raise Exception(f"Left transformation output table not found. Please execute the transformation '{left_step.step_name}' first.")
                         raise Exception(f"Error reading left transformation data: {str(e)}")
             
             # Get right table data
             if join_op.right_table_type == 'sheet':
-                right_sheet = sheet_repo.get_sheet_by_id(join_op.right_table_id)
+                right_sheet = sheet_repo.get_sheet_by_id(join_op.right_table_id, current_user.id)
                 if not right_sheet:
                     raise Exception("Right sheet not found")
                 right_df = fetch_full_sheet_data(right_sheet)
                 if right_df is None or right_df.empty:
                     raise Exception("Could not fetch data from right sheet. Please check your Google Sheets authentication.")
             elif join_op.right_table_type == 'transformation':
-                # Get transformation output data
-                right_table_name = f"transform_step_{join_op.right_table_id}"
+                # Get transformation step to find its output table name
+                right_step = db.query(AITransformationStep).filter(
+                    AITransformationStep.id == join_op.right_table_id
+                ).first()
+
+                if not right_step:
+                    raise Exception("Right transformation step not found")
+
+                # Use the custom output_table_name if available
+                if right_step.output_table_name:
+                    right_table_name = right_step.output_table_name
+                else:
+                    # Fallback to default pattern
+                    right_table_name = f"transform_step_{join_op.right_table_id}"
+
                 with engine.connect() as conn:
                     try:
-                        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"), 
-                                            {"pattern": f"%{right_table_name}%"})
-                        table_names = [row[0] for row in result.fetchall()]
-                        if table_names:
-                            right_df = pd.read_sql_table(table_names[0], conn)
+                        # First try exact table name
+                        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name = :name"),
+                                            {"name": right_table_name})
+                        exact_match = result.fetchone()
+
+                        if exact_match:
+                            right_df = pd.read_sql_table(right_table_name, conn)
                         else:
-                            raise Exception("Right transformation output table not found")
+                            # Fallback to pattern matching for legacy tables
+                            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"),
+                                                {"pattern": f"%transform_step_{join_op.right_table_id}%"})
+                            table_names = [row[0] for row in result.fetchall()]
+                            if table_names:
+                                right_df = pd.read_sql_table(table_names[0], conn)
+                            else:
+                                raise Exception(f"Right transformation output table '{right_table_name}' not found. Please execute the transformation '{right_step.step_name}' first.")
                     except Exception as e:
+                        if "not found" in str(e).lower() or "no such table" in str(e).lower():
+                            raise Exception(f"Right transformation output table not found. Please execute the transformation '{right_step.step_name}' first.")
                         raise Exception(f"Error reading right transformation data: {str(e)}")
             
             if left_df is None or right_df is None:
@@ -2416,21 +2454,21 @@ async def delete_join(project_id: int, join_id: int, db: Session = Depends(get_d
 
 # Project Charts endpoints
 @app.get("/projects/{project_id}/charts")
-async def get_project_charts(project_id: int, db: Session = Depends(get_db)):
+async def get_project_charts(project_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get charts for a transformation project"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
-        
+        project = project_repo.get_project_by_id(current_user.id, project_id)
+
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        # Get charts associated with this project
+        # Get charts associated with this project (already verified user owns project)
         chart_repo = ChartRepository(db)
-        charts = db.query(SavedChart).filter(SavedChart.project_id == project_id).all()
+        charts = db.query(SavedChart).filter(
+            SavedChart.user_id == current_user.id,
+            SavedChart.project_id == project_id
+        ).all()
         
         return {
             "charts": [
@@ -2453,14 +2491,14 @@ async def get_project_charts(project_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/projects/{project_id}/recommendations")
-async def get_project_chart_recommendations(project_id: int, db: Session = Depends(get_db)):
+async def get_project_chart_recommendations(project_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get chart recommendations for a transformation project based on joined data"""
     try:
         if 'default' not in user_credentials:
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -2471,7 +2509,7 @@ async def get_project_chart_recommendations(project_id: int, db: Session = Depen
         all_columns = set()
         
         for sheet_id in project.sheet_ids:
-            sheet = sheet_repo.get_sheet_by_id(sheet_id)
+            sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
             if sheet and sheet.columns:
                 all_columns.update(sheet.columns)
         
@@ -2552,14 +2590,14 @@ class ProjectUpdateRequest(BaseModel):
     schedule_config: Optional[Dict[str, Any]] = None
 
 @app.put("/projects/{project_id}")
-async def update_project(project_id: int, update_request: ProjectUpdateRequest, db: Session = Depends(get_db)):
+async def update_project(project_id: int, update_request: ProjectUpdateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Update a transformation project"""
     try:
         if 'default' not in user_credentials:
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -2571,7 +2609,7 @@ async def update_project(project_id: int, update_request: ProjectUpdateRequest, 
         # If join_config or transformations changed, trigger pipeline execution
         if 'join_config' in update_data or 'transformations' in update_data:
             import asyncio
-            asyncio.create_task(execute_transformation_pipeline(project_id, db))
+            asyncio.create_task(execute_transformation_pipeline(project_id, current_user.id, db))
         
         return {
             "id": updated_project.id,
@@ -2594,17 +2632,15 @@ async def update_project(project_id: int, update_request: ProjectUpdateRequest, 
 
 @app.put("/projects/{project_id}/canvas-layout")
 async def update_project_canvas_layout(
-    project_id: int, 
-    request: CanvasLayoutUpdateRequest, 
+    project_id: int,
+    request: CanvasLayoutUpdateRequest,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Update the canvas layout (node positions and connections) for a project"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -2614,8 +2650,8 @@ async def update_project_canvas_layout(
             "nodes": request.nodes,
             "connections": request.connections
         }
-        
-        project_repo.update_project(project_id, canvas_layout=layout_data)
+
+        project_repo.update_project(current_user.id, project_id, canvas_layout=layout_data)
         
         return {"message": "Canvas layout updated successfully"}
     
@@ -2626,15 +2662,12 @@ async def update_project_canvas_layout(
         raise HTTPException(status_code=500, detail=f"Failed to update canvas layout: {str(e)}")
 
 @app.delete("/projects/{project_id}")
-async def delete_project(project_id: int, db: Session = Depends(get_db)):
+async def delete_project(project_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Delete a transformation project and all associated data"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
-        
+        project = project_repo.get_project_by_id(current_user.id, project_id)
+
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
@@ -2683,9 +2716,12 @@ async def delete_project(project_id: int, db: Session = Depends(get_db)):
 
         # Delete project charts (cascade handled by database relationship)
         chart_repo = ChartRepository(db)
-        project_charts = db.query(SavedChart).filter(SavedChart.project_id == project_id).all()
+        project_charts = db.query(SavedChart).filter(
+            SavedChart.user_id == current_user.id,
+            SavedChart.project_id == project_id
+        ).all()
         for chart in project_charts:
-            chart_repo.delete_chart(chart.id)
+            chart_repo.delete_chart(current_user.id, chart.id)
         
         # Delete warehouse data if exists
         if project.warehouse_table_name:
@@ -2699,7 +2735,7 @@ async def delete_project(project_id: int, db: Session = Depends(get_db)):
                 print(f"Warning: Failed to clean up warehouse entry: {e}")
         
         # Delete the project itself
-        success = project_repo.delete_project(project_id)
+        success = project_repo.delete_project(current_user.id, project_id)
         
         if not success:
             raise HTTPException(status_code=500, detail="Failed to delete project")
@@ -2712,16 +2748,16 @@ async def delete_project(project_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 # Pipeline orchestration functions
-async def execute_transformation_pipeline(project_id: int, db: Session):
+async def execute_transformation_pipeline(project_id: int, user_id: int, db: Session):
     """Execute the transformation pipeline for a project"""
     from datetime import datetime, timezone
     
     start_time = datetime.now(timezone.utc)
     history_entry = None
-    
+
     try:
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(user_id, project_id)
         
         if not project:
             return
@@ -2760,7 +2796,7 @@ async def execute_transformation_pipeline(project_id: int, db: Session):
             return
         
         # Step 2: Get fresh sheets data and apply transformations
-        transformed_data = await process_transformation(project, sheet_repo)
+        transformed_data = await process_transformation(project, user_id, sheet_repo)
         
         if transformed_data is not None:
             # Step 3: Store in warehouse
@@ -2832,7 +2868,7 @@ async def sync_project_source_sheets(project: TransformationProject, sheet_repo:
         
         for sheet_id in project.sheet_ids:
             try:
-                existing_sheet = sheet_repo.get_sheet_by_id(sheet_id)
+                existing_sheet = sheet_repo.get_sheet_by_id(sheet_id, user_id)
                 
                 if not existing_sheet:
                     print(f"Sheet {sheet_id} not found for project {project.id}")
@@ -2911,13 +2947,13 @@ async def sync_project_source_sheets(project: TransformationProject, sheet_repo:
             'error': str(e)
         }
 
-async def process_transformation(project: TransformationProject, sheet_repo: SheetRepository):
+async def process_transformation(project: TransformationProject, user_id: int, sheet_repo: SheetRepository):
     """Process data transformation based on project configuration"""
     try:
         # Get all sheet data for the project
         dataframes = {}
         for sheet_id in project.sheet_ids:
-            sheet = sheet_repo.get_sheet_by_id(sheet_id)
+            sheet = sheet_repo.get_sheet_by_id(sheet_id, user_id)
             if sheet:
                 df = fetch_full_sheet_data(sheet)
                 dataframes[sheet_id] = df
@@ -3020,7 +3056,7 @@ async def execute_pipeline(project_id: int, db: Session = Depends(get_db)):
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         # Execute pipeline asynchronously
-        asyncio.create_task(execute_transformation_pipeline(project_id, db))
+        asyncio.create_task(execute_transformation_pipeline(project_id, current_user.id, db))
         
         return {"message": "Pipeline execution started", "project_id": project_id}
         
@@ -3028,14 +3064,14 @@ async def execute_pipeline(project_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/projects/{project_id}/charts")
-async def create_project_chart(project_id: int, chart_request: ProjectChartCreateRequest, db: Session = Depends(get_db)):
+async def create_project_chart(project_id: int, chart_request: ProjectChartCreateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Create a new chart for a transformation project"""
     try:
         if 'default' not in user_credentials:
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -3076,14 +3112,14 @@ async def create_project_chart(project_id: int, chart_request: ProjectChartCreat
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/projects/{project_id}/execute-all")
-async def execute_all_transformations(project_id: int, db: Session = Depends(get_db)):
+async def execute_all_transformations(project_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Execute all transformation steps and joins in a project in order"""
     try:
         if 'default' not in user_credentials:
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -3148,7 +3184,7 @@ async def execute_all_transformations(project_id: int, db: Session = Depends(get
                 if step.upstream_sheet_ids:
                     sheet_repo = SheetRepository(db)
                     for sheet_id in step.upstream_sheet_ids:
-                        sheet = sheet_repo.get_sheet_by_id(sheet_id)
+                        sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
                         if sheet and sheet.sample_data and sheet.columns:
                             df_data = {}
                             for i, col in enumerate(sheet.columns):
@@ -3298,14 +3334,14 @@ async def execute_all_transformations(project_id: int, db: Session = Depends(get
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/projects/{project_id}/data-sources")
-async def get_project_data_sources(project_id: int, db: Session = Depends(get_db)):
+async def get_project_data_sources(project_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get available data sources (original sheets + transformed tables) for a project"""
     try:
         if 'default' not in user_credentials:
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -3315,7 +3351,7 @@ async def get_project_data_sources(project_id: int, db: Session = Depends(get_db
         # Add original sheets as data sources
         sheet_repo = SheetRepository(db)
         for sheet_id in project.sheet_ids:
-            sheet = sheet_repo.get_sheet_by_id(sheet_id)
+            sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
             if sheet:
                 data_sources.append({
                     "id": f"sheet_{sheet_id}",
@@ -3370,14 +3406,14 @@ async def get_project_data_sources(project_id: int, db: Session = Depends(get_db
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/projects/{project_id}/table-data/{table_id}")
-async def get_table_data(project_id: int, table_id: str, db: Session = Depends(get_db)):
+async def get_table_data(project_id: int, table_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get data from a specific table (sheet or transformed) for charting"""
     try:
         if 'default' not in user_credentials:
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -3388,7 +3424,7 @@ async def get_table_data(project_id: int, table_id: str, db: Session = Depends(g
             # Get data from original sheet
             sheet_id = int(table_id.replace("sheet_", ""))
             sheet_repo = SheetRepository(db)
-            sheet = sheet_repo.get_sheet_by_id(sheet_id)
+            sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
             
             if not sheet:
                 raise HTTPException(status_code=404, detail="Sheet not found")
@@ -3469,14 +3505,14 @@ async def get_table_data(project_id: int, table_id: str, db: Session = Depends(g
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/projects/{project_id}/data")
-async def get_project_data(project_id: int, db: Session = Depends(get_db)):
+async def get_project_data(project_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get transformed data from warehouse for a project"""
     try:
         if 'default' not in user_credentials:
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -3529,14 +3565,14 @@ async def get_project_data(project_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/projects/{project_id}/history")
-async def get_project_pipeline_history(project_id: int, limit: int = 20, db: Session = Depends(get_db)):
+async def get_project_pipeline_history(project_id: int, limit: int = 20, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get pipeline execution history for a project"""
     try:
         if 'default' not in user_credentials:
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -3575,8 +3611,9 @@ async def get_project_pipeline_history(project_id: int, limit: int = 20, db: Ses
 # AI Transformation Endpoints
 @app.post("/projects/{project_id}/ai-transformations")
 async def create_ai_transformation_step(
-    project_id: int, 
-    request: AITransformationRequest, 
+    project_id: int,
+    request: AITransformationRequest,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Create a new AI-powered transformation step"""
@@ -3586,7 +3623,7 @@ async def create_ai_transformation_step(
         
         # Verify project exists
         project_repo = TransformationProjectRepository(db)
-        project = project_repo.get_project_by_id(project_id)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
@@ -3598,7 +3635,7 @@ async def create_ai_transformation_step(
         if request.upstream_sheet_ids:
             sheet_repo = SheetRepository(db)
             for sheet_id in request.upstream_sheet_ids:
-                sheet = sheet_repo.get_sheet_by_id(sheet_id)
+                sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
                 if sheet and sheet.sample_data:
                     sample_data.extend(sheet.sample_data)
                     if sheet.columns:
@@ -3813,11 +3850,9 @@ async def delete_transformation_step(step_id: int, db: Session = Depends(get_db)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/ai-transformations/{step_id}/execute")
-async def execute_transformation_step(step_id: int, db: Session = Depends(get_db)):
+async def execute_transformation_step(step_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Execute a single AI transformation step"""
     try:
-        if 'default' not in user_credentials:
-            raise HTTPException(status_code=401, detail="Not authenticated")
         
         # Get the transformation step
         step = db.query(AITransformationStep).filter(
@@ -3843,7 +3878,7 @@ async def execute_transformation_step(step_id: int, db: Session = Depends(get_db
             if step.upstream_sheet_ids:
                 sheet_repo = SheetRepository(db)
                 for sheet_id in step.upstream_sheet_ids:
-                    sheet = sheet_repo.get_sheet_by_id(sheet_id)
+                    sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
                     if sheet:
                         # Get full data from warehouse table for this sheet if it exists
                         project = db.query(TransformationProject).filter(
@@ -3981,14 +4016,14 @@ async def execute_transformation_step(step_id: int, db: Session = Depends(get_db
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/sheets/{sheet_id}/data")
-async def get_sheet_data(sheet_id: int, db: Session = Depends(get_db)):
+async def get_sheet_data(sheet_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get full data from a specific sheet for viewing"""
     try:
         if 'default' not in user_credentials:
             raise HTTPException(status_code=401, detail="Not authenticated")
         
         sheet_repo = SheetRepository(db)
-        sheet = sheet_repo.get_sheet_by_id(sheet_id)
+        sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
         
         if not sheet:
             raise HTTPException(status_code=404, detail="Sheet not found")
