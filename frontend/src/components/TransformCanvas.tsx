@@ -913,8 +913,29 @@ export default function TransformCanvas({
       })
 
       if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.detail || 'Failed to create join')
+        let errorMessage = 'Failed to create join'
+        try {
+          const error = await response.json()
+          console.error('Join creation error response:', error)
+          console.error('Error type:', typeof error)
+          console.error('Error keys:', Object.keys(error))
+
+          if (typeof error === 'string') {
+            errorMessage = error
+          } else if (error.detail) {
+            errorMessage = Array.isArray(error.detail)
+              ? error.detail.map(d => typeof d === 'object' ? d.msg || JSON.stringify(d) : d).join(', ')
+              : error.detail
+          } else if (error.message) {
+            errorMessage = error.message
+          } else {
+            errorMessage = JSON.stringify(error)
+          }
+        } catch (e) {
+          console.error('Error parsing response:', e)
+          errorMessage = `HTTP ${response.status} ${response.statusText}`
+        }
+        throw new Error(errorMessage)
       }
 
       const result = await response.json()
@@ -1122,7 +1143,13 @@ export default function TransformCanvas({
       
     } catch (error) {
       console.error('Error creating join:', error)
-      alert(`Failed to create join: ${error.message}`)
+      let errorMessage = 'An unexpected error occurred'
+      if (error instanceof Error) {
+        errorMessage = error.message
+      } else if (typeof error === 'object' && error !== null) {
+        errorMessage = JSON.stringify(error)
+      }
+      alert(`Failed to create join: ${errorMessage}`)
     }
   }, [joinModalPosition, availableTables, projectId])
 

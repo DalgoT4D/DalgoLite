@@ -9,6 +9,7 @@
 *.pdf
 *.db
 *.pyc
+*.sql
 
 logs/
 frontend/node_modules/

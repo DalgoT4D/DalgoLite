@@ -3,12 +3,24 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
+interface User {
+  id: number
+  email: string
+  name: string
+  profile_picture: string
+  onboarding_completed: boolean
+  onboarding_step: number
+}
+
 interface AuthContextType {
   isAuthenticated: boolean
   isLoading: boolean
+  user: User | null
   login: () => void
   logout: () => void
   checkAuthStatus: () => Promise<void>
+  updateOnboardingStep: (step: number, data?: any) => Promise<void>
+  completeOnboarding: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -28,21 +40,69 @@ interface AuthProviderProps {
 export const AuthProvider = ({ children }: AuthProviderProps) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [user, setUser] = useState<User | null>(null)
 
   const checkAuthStatus = async () => {
     try {
-      // Try to fetch connected sheets to check if user is authenticated
-      const response = await fetch(getApiUrl(API_ENDPOINTS.SHEETS_CONNECTED))
-      if (response.ok) {
+      const response = await fetch(getApiUrl('/auth/status'))
+      const data = await response.json()
+
+      if (data.authenticated) {
         setIsAuthenticated(true)
+        setUser(data.user)
       } else {
         setIsAuthenticated(false)
+        setUser(null)
       }
     } catch (error) {
       console.error('Auth check failed:', error)
       setIsAuthenticated(false)
+      setUser(null)
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const updateOnboardingStep = async (step: number, data?: any) => {
+    try {
+      const response = await fetch(getApiUrl('/api/user/update-onboarding'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ step, data })
+      })
+
+      const result = await response.json()
+      if (result.success && user) {
+        setUser({
+          ...user,
+          onboarding_step: step
+        })
+      }
+    } catch (error) {
+      console.error('Failed to update onboarding step:', error)
+    }
+  }
+
+  const completeOnboarding = async () => {
+    try {
+      const response = await fetch(getApiUrl('/api/user/complete-onboarding'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      })
+
+      const result = await response.json()
+      if (result.success && user) {
+        setUser({
+          ...user,
+          onboarding_completed: true
+        })
+      }
+    } catch (error) {
+      console.error('Failed to complete onboarding:', error)
     }
   }
 
@@ -56,6 +116,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
         method: 'POST',
       })
       setIsAuthenticated(false)
+      setUser(null)
     } catch (error) {
       console.error('Logout failed:', error)
     }
@@ -70,9 +131,12 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
       value={{
         isAuthenticated,
         isLoading,
+        user,
         login,
         logout,
         checkAuthStatus,
+        updateOnboardingStep,
+        completeOnboarding
       }}
     >
       {children}
