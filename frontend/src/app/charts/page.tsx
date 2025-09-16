@@ -101,6 +101,7 @@ function ChartDisplay({ chartId }: ChartDisplayProps) {
         },
       }}
       title={chartData.chart_name}
+      selectedColumns={chartData.chart_config?.selected_columns}
     />
   )
 }
@@ -147,7 +148,8 @@ const CHART_TYPES = [
   { value: 'line', label: 'Line Chart', description: 'Show trends over time or continuous data' },
   { value: 'pie', label: 'Pie Chart', description: 'Show proportions of a whole' },
   { value: 'scatter', label: 'Scatter Plot', description: 'Show relationship between two variables' },
-  { value: 'histogram', label: 'Histogram', description: 'Show distribution of a single variable' }
+  { value: 'histogram', label: 'Histogram', description: 'Show distribution of a single variable' },
+  { value: 'table', label: 'Table', description: 'Display data in rows and columns' }
 ]
 
 const AGGREGATION_TYPES = [
@@ -180,7 +182,8 @@ export default function UnifiedChartsPage() {
     chart_type: 'bar',
     x_axis_column: '',
     y_axis_column: '',
-    aggregation_type: 'count'
+    aggregation_type: 'count',
+    selected_columns: [] as string[]
   })
   
   const [saving, setSaving] = useState(false)
@@ -270,7 +273,9 @@ export default function UnifiedChartsPage() {
   }
 
   const handleCreateChart = async () => {
-    if (!chartForm.chart_name.trim() || !chartForm.x_axis_column || !selectedDataSource) return
+    // For table charts, X-axis column is not required
+    if (!chartForm.chart_name.trim() || !selectedDataSource) return
+    if (chartForm.chart_type !== 'table' && !chartForm.x_axis_column) return
     
     setSaving(true)
     try {
@@ -294,7 +299,8 @@ export default function UnifiedChartsPage() {
         x_axis_column: chartForm.x_axis_column,
         y_axis_column: chartForm.y_axis_column || undefined,
         chart_config: {
-          aggregation_type: chartForm.aggregation_type
+          aggregation_type: chartForm.aggregation_type,
+          selected_columns: chartForm.chart_type === 'table' ? chartForm.selected_columns : undefined
         },
         source_type: selectedDataSource.type,
         source_id: extractedSourceId
@@ -341,7 +347,8 @@ export default function UnifiedChartsPage() {
         y_axis_column: chartForm.y_axis_column || undefined,
         chart_config: {
           ...editingChart.chart_config,
-          aggregation_type: chartForm.aggregation_type
+          aggregation_type: chartForm.aggregation_type,
+          selected_columns: chartForm.chart_type === 'table' ? chartForm.selected_columns : undefined
         }
       }
 
@@ -393,19 +400,33 @@ export default function UnifiedChartsPage() {
       chart_type: 'bar',
       x_axis_column: '',
       y_axis_column: '',
-      aggregation_type: 'count'
+      aggregation_type: 'count',
+      selected_columns: []
     })
     setSelectedDataSource(null)
   }
 
   const startEditChart = (chart: Chart) => {
     setEditingChart(chart)
+    
+    // Find the data source for this chart
+    const sourceType = chart.chart_config?.source_type || chart.source_type
+    const sourceId = chart.chart_config?.source_id || chart.source_id
+    const dataSource = dataSources.find(ds => 
+      ds.type === sourceType && ds.id === `${sourceType}-${sourceId}`
+    )
+    
+    if (dataSource) {
+      setSelectedDataSource(dataSource)
+    }
+    
     setChartForm({
       chart_name: chart.chart_name,
       chart_type: chart.chart_type,
       x_axis_column: chart.x_axis_column,
       y_axis_column: chart.y_axis_column || '',
-      aggregation_type: chart.chart_config?.aggregation_type || 'count'
+      aggregation_type: chart.chart_config?.aggregation_type || 'count',
+      selected_columns: chart.chart_config?.selected_columns || []
     })
   }
 
@@ -423,7 +444,8 @@ export default function UnifiedChartsPage() {
       chart_type: recommendation.type,
       x_axis_column: recommendation.x_axis,
       y_axis_column: recommendation.y_axis || '',
-      aggregation_type: recommendation.y_axis ? 'sum' : 'count'
+      aggregation_type: recommendation.y_axis ? 'sum' : 'count',
+      selected_columns: []
     })
     setShowCreateChart(true)
     setShowRecommendations(false)
@@ -689,7 +711,8 @@ export default function UnifiedChartsPage() {
                           setChartForm(prev => ({
                             ...prev,
                             x_axis_column: '',
-                            y_axis_column: ''
+                            y_axis_column: '',
+                            selected_columns: []
                           }))
                         }}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -727,8 +750,8 @@ export default function UnifiedChartsPage() {
                     </div>
                   </div>
 
-                  {/* X-Axis Column */}
-                  {selectedDataSource && (
+                  {/* X-Axis Column - Hide for table charts */}
+                  {selectedDataSource && chartForm.chart_type !== 'table' && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         X-Axis Column
@@ -746,8 +769,8 @@ export default function UnifiedChartsPage() {
                     </div>
                   )}
 
-                  {/* Y-Axis Column */}
-                  {!['pie', 'histogram'].includes(chartForm.chart_type) && selectedDataSource && (
+                  {/* Y-Axis Column - Hide for pie, histogram, and table charts */}
+                  {!['pie', 'histogram', 'table'].includes(chartForm.chart_type) && selectedDataSource && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         Y-Axis Column (optional)
@@ -765,23 +788,85 @@ export default function UnifiedChartsPage() {
                     </div>
                   )}
 
-                  {/* Aggregation Type */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Data Aggregation
-                    </label>
-                    <select
-                      value={chartForm.aggregation_type}
-                      onChange={(e) => setChartForm(prev => ({ ...prev, aggregation_type: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      {AGGREGATION_TYPES.map((aggType) => (
-                        <option key={aggType.value} value={aggType.value}>
-                          {aggType.label} - {aggType.description}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  {/* Column Selection for Table Charts */}
+                  {chartForm.chart_type === 'table' && selectedDataSource && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Select Columns to Display
+                      </label>
+                      <div className="space-y-2 max-h-48 overflow-y-auto border border-gray-300 rounded-lg p-3">
+                        <div className="flex items-center">
+                          <input
+                            type="checkbox"
+                            id="select-all-columns"
+                            checked={chartForm.selected_columns.length === selectedDataSource.columns.length}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setChartForm(prev => ({ ...prev, selected_columns: [...selectedDataSource.columns] }))
+                              } else {
+                                setChartForm(prev => ({ ...prev, selected_columns: [] }))
+                              }
+                            }}
+                            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                          />
+                          <label htmlFor="select-all-columns" className="ml-2 text-sm font-medium text-gray-900">
+                            Select All
+                          </label>
+                        </div>
+                        {selectedDataSource.columns.map((column) => (
+                          <div key={column} className="flex items-center">
+                            <input
+                              type="checkbox"
+                              id={`column-${column}`}
+                              checked={chartForm.selected_columns.includes(column)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setChartForm(prev => ({ 
+                                    ...prev, 
+                                    selected_columns: [...prev.selected_columns, column] 
+                                  }))
+                                } else {
+                                  setChartForm(prev => ({ 
+                                    ...prev, 
+                                    selected_columns: prev.selected_columns.filter(col => col !== column) 
+                                  }))
+                                }
+                              }}
+                              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                            />
+                            <label htmlFor={`column-${column}`} className="ml-2 text-sm text-gray-700">
+                              {column}
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                      {chartForm.selected_columns.length === 0 && (
+                        <p className="text-sm text-amber-600 mt-1">
+                          No columns selected. All columns will be displayed by default.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Aggregation Type - Hide for table charts */}
+                  {chartForm.chart_type !== 'table' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Data Aggregation
+                      </label>
+                      <select
+                        value={chartForm.aggregation_type}
+                        onChange={(e) => setChartForm(prev => ({ ...prev, aggregation_type: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        {AGGREGATION_TYPES.map((aggType) => (
+                          <option key={aggType.value} value={aggType.value}>
+                            {aggType.label} - {aggType.description}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex justify-end gap-3 mt-8 pt-6 border-t">
@@ -800,7 +885,12 @@ export default function UnifiedChartsPage() {
                   </button>
                   <button
                     onClick={editingChart ? handleUpdateChart : handleCreateChart}
-                    disabled={!chartForm.chart_name.trim() || !chartForm.x_axis_column || (!selectedDataSource && !editingChart) || saving}
+                    disabled={
+                      !chartForm.chart_name.trim() || 
+                      (chartForm.chart_type !== 'table' && !chartForm.x_axis_column) || 
+                      (!selectedDataSource && !editingChart) || 
+                      saving
+                    }
                     className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-6 py-2 rounded-lg flex items-center gap-2 transition-colors"
                   >
                     <Save size={18} />

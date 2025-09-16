@@ -17,7 +17,7 @@ import gspread
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from database import create_tables, get_db, SheetRepository, ChartRepository, TransformationProjectRepository, JoinRepository, ConnectedSheet, SavedChart, TransformationProject, TransformedDataWarehouse, PipelineExecutionHistory, AITransformationStep, JoinOperation, CanvasNode, CanvasConnection, engine, User
+from database import create_tables, get_db, SheetRepository, ChartRepository, TransformationProjectRepository, JoinRepository, QualitativeDataRepository, ConnectedSheet, SavedChart, TransformationProject, TransformedDataWarehouse, PipelineExecutionHistory, AITransformationStep, JoinOperation, QualitativeDataOperation, CanvasNode, CanvasConnection, engine, User
 from pydantic import BaseModel
 import hashlib
 import asyncio
@@ -27,6 +27,7 @@ from llm_service import llm_service
 from data_context import DataContextGenerator
 from chart_service import ChartCreationService, get_chart_tools
 from ai_transformation_service import ai_service
+from qualitative_data_service import get_qualitative_service
 
 # Create database tables
 create_tables()
@@ -159,21 +160,171 @@ class AITransformationRequest(BaseModel):
     step_name: str
     user_prompt: str
     output_table_name: Optional[str] = None  # Custom output table name
-    upstream_step_ids: Optional[List[int]] = []
-    upstream_sheet_ids: Optional[List[int]] = []
+    upstream_step_ids: Optional[List[int]] = []  # Legacy support
+    upstream_sheet_ids: Optional[List[int]] = []  # Legacy support
+    upstream_tables: Optional[List[Dict[str, Any]]] = []  # New unified format: [{"id": 1, "type": "sheet"}]
     canvas_position: Optional[Dict[str, float]] = {"x": 0, "y": 0}
 
 class TransformationStepUpdateRequest(BaseModel):
     step_name: Optional[str] = None
     user_prompt: Optional[str] = None
     output_table_name: Optional[str] = None
-    upstream_step_ids: Optional[List[int]] = None
-    upstream_sheet_ids: Optional[List[int]] = None
-    canvas_position: Optional[Dict[str, float]] = None
+
+class QualitativeDataCreateRequest(BaseModel):
+    project_id: int
+    name: str
+    source_table_id: int
+    source_table_type: str  # 'sheet' or 'transformation'  
+    qualitative_column: str
+    analysis_type: str  # 'sentiment' or 'summarization'
+    aggregation_column: Optional[str] = None  # Optional column for group-by summarization
+    summarize_sentiment_analysis: Optional[bool] = None  # Whether to include sentiment stats
+    sentiment_column: Optional[str] = None  # Column containing sentiment analysis results
+    canvas_position: Dict[str, int]
+    output_table_name: Optional[str] = None
+
+class QualitativeDataUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    source_table_id: Optional[int] = None
+    source_table_type: Optional[str] = None
+    qualitative_column: Optional[str] = None
+    analysis_type: Optional[str] = None
+    aggregation_column: Optional[str] = None
+    summarize_sentiment_analysis: Optional[bool] = None
+    sentiment_column: Optional[str] = None
+    output_table_name: Optional[str] = None
 
 class CanvasLayoutUpdateRequest(BaseModel):
     nodes: List[Dict[str, Any]]
     connections: List[Dict[str, Any]]
+
+def load_table_data(table_id, table_type, current_user, db):
+    """Load data from a single table of any type"""
+    try:
+        if table_type == 'sheet':
+            sheet_repo = SheetRepository(db)
+            sheet = sheet_repo.get_sheet_by_id(table_id, current_user.id)
+            if sheet:
+                return fetch_full_sheet_data(sheet)
+                
+        elif table_type == 'transformation':
+            ai_step = db.query(AITransformationStep).filter(
+                AITransformationStep.id == table_id,
+                AITransformationStep.status == 'completed'
+            ).first()
+            if ai_step:
+                table_name = getattr(ai_step, 'actual_table_name', None) or ai_step.output_table_name
+                if table_name:
+                    return pd.read_sql_table(table_name, engine)
+                    
+        elif table_type == 'join':
+            join_op = db.query(JoinOperation).filter(
+                JoinOperation.id == table_id,
+                JoinOperation.status == 'completed'
+            ).first()
+            if join_op:
+                table_name = getattr(join_op, 'actual_table_name', None) or join_op.output_table_name
+                if table_name:
+                    return pd.read_sql_table(table_name, engine)
+                    
+        elif table_type == 'qualitative':
+            qual_op = db.query(QualitativeDataOperation).filter(
+                QualitativeDataOperation.id == table_id,
+                QualitativeDataOperation.status == 'completed'
+            ).first()
+            if qual_op:
+                table_name = getattr(qual_op, 'actual_table_name', None) or qual_op.output_table_name
+                if table_name:
+                    return pd.read_sql_table(table_name, engine)
+                    
+    except Exception as e:
+        print(f"Could not load {table_type} table {table_id}: {e}")
+        
+    return None
+
+def get_table_columns(table_id, table_type, current_user, db):
+    """Get available columns from a table of any type by reading from the actual database table"""
+    print(f"DEBUG get_table_columns: table_id={table_id}, table_type={table_type}")
+    try:
+        if table_type == 'sheet':
+            sheet_repo = SheetRepository(db)
+            sheet = sheet_repo.get_sheet_by_id(table_id, current_user.id)
+            if sheet and sheet.columns:
+                return sheet.columns
+                
+        elif table_type in ['transformation', 'join', 'qualitative']:
+            # For database tables, get the actual table name and fetch columns from it
+            table_name = None
+            
+            if table_type == 'transformation':
+                ai_step = db.query(AITransformationStep).filter(
+                    AITransformationStep.id == table_id,
+                    AITransformationStep.status == 'completed'
+                ).first()
+                if ai_step:
+                    table_name = getattr(ai_step, 'actual_table_name', None) or ai_step.output_table_name
+                    
+            elif table_type == 'join':
+                join_op = db.query(JoinOperation).filter(
+                    JoinOperation.id == table_id,
+                    JoinOperation.status == 'completed'
+                ).first()
+                if join_op:
+                    table_name = getattr(join_op, 'actual_table_name', None) or join_op.output_table_name
+                    
+            elif table_type == 'qualitative':
+                print(f"DEBUG: Looking for qualitative operation with id={table_id}")
+                qual_op = db.query(QualitativeDataOperation).filter(
+                    QualitativeDataOperation.id == table_id,
+                    QualitativeDataOperation.status == 'completed'
+                ).first()
+                print(f"DEBUG: Found qualitative operation: {qual_op}")
+                if qual_op:
+                    table_name = getattr(qual_op, 'actual_table_name', None) or qual_op.output_table_name
+                    print(f"DEBUG: Qualitative table_name: {table_name}")
+            
+            # If we have a table name, fetch columns from the actual database table
+            if table_name:
+                with engine.connect() as conn:
+                    # Check if table exists
+                    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name = :name"), 
+                                        {"name": table_name})
+                    if result.fetchone():
+                        # Get column names from the table
+                        result = conn.execute(text(f"PRAGMA table_info({table_name})"))
+                        columns = [row[1] for row in result.fetchall()]  # column name is at index 1
+                        return columns
+                
+    except Exception as e:
+        print(f"Could not get columns for {table_type} table {table_id}: {e}")
+        
+    return []
+
+def load_upstream_data(step, current_user, db):
+    """Load data from upstream tables using unified upstream_tables format or legacy format"""
+    sheet_data = {}
+    
+    # Try new unified format first
+    if hasattr(step, 'upstream_tables') and step.upstream_tables:
+        for table_ref in step.upstream_tables:
+            table_id = table_ref['id']
+            table_type = table_ref['type']
+            
+            df = load_table_data(table_id, table_type, current_user, db)
+            if df is not None and not df.empty:
+                sheet_data[f'{table_type}_{table_id}'] = df
+    
+    # Fallback to legacy format if no unified format or empty
+    elif hasattr(step, 'upstream_sheet_ids') and step.upstream_sheet_ids:
+        sheet_repo = SheetRepository(db)
+        for sheet_id in step.upstream_sheet_ids:
+            sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
+            if sheet:
+                df = fetch_full_sheet_data(sheet)
+                if df is not None and not df.empty:
+                    sheet_data[f'sheet_{sheet_id}'] = df
+    
+    return sheet_data
 
 def extract_spreadsheet_id(input_str: str) -> str:
     """
@@ -560,9 +711,19 @@ async def analyze_sheet(
         # Get sheet data - try different range formats
         sheet = service.spreadsheets()
         
+        # Get actual sheet name first
+        actual_sheet_name = 'Sheet1'  # fallback
+        try:
+            sheets = spreadsheet_metadata.get('sheets', [])
+            if sheets:
+                actual_sheet_name = sheets[0]['properties']['title']
+        except Exception:
+            pass
+        
         # Try multiple range formats in order of preference
         range_attempts = [
-            range_name,  # Original range (Sheet1!A:Z)
+            f"{actual_sheet_name}!A:Z",  # Use actual sheet name
+            range_name,  # Original range (might be Sheet1!A:Z)
             'A:Z',       # Without sheet name
             'A1:Z1000',  # Specific range
             '',          # Empty range (gets all data)
@@ -570,7 +731,6 @@ async def analyze_sheet(
         
         result = None
         successful_range = None
-        actual_sheet_name = 'Sheet1'
         
         for attempt_range in range_attempts:
             try:
@@ -1236,7 +1396,7 @@ async def get_all_charts(current_user: User = Depends(get_current_user), db: Ses
 class UnifiedChartCreateRequest(BaseModel):
     chart_name: str
     chart_type: str
-    x_axis_column: str
+    x_axis_column: Optional[str] = None  # Optional for table charts
     y_axis_column: Optional[str] = None
     chart_config: Optional[dict] = {}
     # Source identification
@@ -1453,34 +1613,51 @@ async def get_chart_data(chart_id: int, current_user: User = Depends(get_current
         headers = values[0]
         data_rows = values[1:]
         
-        # Find column indices
-        try:
-            x_col_idx = headers.index(chart.x_axis_column)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Column '{chart.x_axis_column}' not found")
-        
-        y_col_idx = None
-        if chart.y_axis_column:
+        # For table charts, we don't need specific column indices
+        if chart.chart_type.lower() == 'table':
+            # Convert data to dict format for easier table rendering
+            table_data = []
+            for row in data_rows:
+                if row:  # Skip empty rows
+                    row_dict = {}
+                    for i, header in enumerate(headers):
+                        row_dict[header] = row[i] if i < len(row) else ''
+                    table_data.append(row_dict)
+            
+            processed_data = process_chart_data(table_data, None, None, chart.chart_type, chart.chart_config)
+        else:
+            # Find column indices for regular charts
             try:
-                y_col_idx = headers.index(chart.y_axis_column)
+                x_col_idx = headers.index(chart.x_axis_column) if chart.x_axis_column and chart.x_axis_column.strip() else None
             except ValueError:
-                raise HTTPException(status_code=400, detail=f"Column '{chart.y_axis_column}' not found")
-        
-        # Process data based on chart type
-        processed_data = process_chart_data(data_rows, x_col_idx, y_col_idx, chart.chart_type, chart.chart_config)
+                raise HTTPException(status_code=400, detail=f"Column '{chart.x_axis_column}' not found")
+            
+            y_col_idx = None
+            if chart.y_axis_column:
+                try:
+                    y_col_idx = headers.index(chart.y_axis_column)
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=f"Column '{chart.y_axis_column}' not found")
+            
+            # Process data based on chart type
+            processed_data = process_chart_data(data_rows, x_col_idx, y_col_idx, chart.chart_type, chart.chart_config)
         
         return {
             "chart_id": chart.id,
             "chart_name": chart.chart_name,
             "chart_type": chart.chart_type,
             "data": processed_data["data"],
-            "options": processed_data["options"]
+            "options": processed_data["options"],
+            "chart_config": chart.chart_config
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Chart data endpoint error: {type(e).__name__}: {str(e)}")
+        print(f"DEBUG: Chart data endpoint error for chart_id={chart_id}")
+        print(f"DEBUG: Chart type: {chart.chart_type if 'chart' in locals() else 'Unknown'}")
+        print(f"DEBUG: Error type: {type(e).__name__}")
+        print(f"DEBUG: Error message: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Chart data error: {str(e)}")
@@ -1489,6 +1666,17 @@ def process_chart_data(data_rows, x_col_idx, y_col_idx, chart_type, chart_config
     """Process raw data into Chart.js format"""
     import pandas as pd
     from collections import Counter
+    
+    # Handle table charts differently
+    if chart_type.lower() == 'table':
+        # Return raw data for table rendering
+        return {
+            "data": {
+                "raw_data": data_rows,
+                "chart_config": chart_config
+            },
+            "options": {}
+        }
     
     # Extract x-axis values
     x_values = [str(row[x_col_idx]) if len(row) > x_col_idx else '' for row in data_rows if row]
@@ -1661,6 +1849,31 @@ async def get_all_data_sources(current_user: User = Depends(get_current_user), d
                     "left_table": join.left_table_name if hasattr(join, 'left_table_name') else "Unknown",
                     "right_table": join.right_table_name if hasattr(join, 'right_table_name') else "Unknown",
                     "output_table_name": join.output_table_name
+                }
+            })
+        
+        # Get all completed qualitative data operations for user's projects only
+        qual_ops = db.query(QualitativeDataOperation).filter(
+            QualitativeDataOperation.project_id.in_(user_project_ids),
+            QualitativeDataOperation.status == 'completed'
+        ).all()
+
+        for qual_op in qual_ops:
+            # Get project info for context (already filtered by user)
+            project = next((p for p in user_projects if p.id == qual_op.project_id), None)
+            
+            data_sources.append({
+                "id": f"qualitative-{qual_op.id}",
+                "type": "qualitative",
+                "name": f"{qual_op.name} ({project.name if project else 'Unknown Project'})",
+                "display_name": f"🧠 {qual_op.name}",
+                "columns": qual_op.output_columns or [],
+                "metadata": {
+                    "project_id": qual_op.project_id,
+                    "project_name": project.name if project else "Unknown Project",
+                    "analysis_type": qual_op.analysis_type,
+                    "qualitative_column": qual_op.qualitative_column,
+                    "output_table_name": qual_op.output_table_name
                 }
             })
         
@@ -1857,11 +2070,22 @@ def fetch_full_sheet_data_from_google(sheet: ConnectedSheet) -> pd.DataFrame:
         
         service = build('sheets', 'v4', credentials=creds)
         
+        # Get actual sheet name first (same logic as analyze_sheet)
+        actual_sheet_name = 'Sheet1'  # fallback
+        try:
+            spreadsheet_metadata = service.spreadsheets().get(spreadsheetId=sheet.spreadsheet_id).execute()
+            sheets = spreadsheet_metadata.get('sheets', [])
+            if sheets:
+                actual_sheet_name = sheets[0]['properties']['title']
+        except Exception:
+            pass
+        
         # Use the same range detection logic as analyze_sheet
         range_attempts = [
-            f"{sheet.sheet_name}!A:Z",  # Try with sheet name first
-            'A:Z',                      # Without sheet name  
-            'A1:Z1000',                 # Specific range
+            f"{actual_sheet_name}!A:Z",  # Try with actual sheet name first
+            f"{sheet.sheet_name}!A:Z",   # Try with stored sheet name (for backward compatibility)
+            'A:Z',                       # Without sheet name  
+            'A1:Z1000',                  # Specific range
         ]
         
         result = None
@@ -2028,34 +2252,14 @@ async def create_join(project_id: int, request: JoinCreateRequest, current_user:
         sheet_repo = SheetRepository(db)
         
         # Validate left table
-        if request.left_table_type == 'sheet':
-            left_table = sheet_repo.get_sheet_by_id(request.left_table_id, current_user.id)
-            if not left_table:
-                raise HTTPException(status_code=404, detail="Left table (sheet) not found")
-        elif request.left_table_type == 'transformation':
-            # Validate transformation step exists and is completed
-            left_step = db.query(AITransformationStep).filter(
-                AITransformationStep.id == request.left_table_id,
-                AITransformationStep.project_id == project_id,
-                AITransformationStep.status == 'completed'
-            ).first()
-            if not left_step:
-                raise HTTPException(status_code=404, detail="Left table (transformation step) not found or not completed")
+        left_df = load_table_data(request.left_table_id, request.left_table_type, current_user, db)
+        if left_df is None or left_df.empty:
+            raise HTTPException(status_code=404, detail=f"Left table ({request.left_table_type}) not found or has no data")
         
         # Validate right table  
-        if request.right_table_type == 'sheet':
-            right_table = sheet_repo.get_sheet_by_id(request.right_table_id, current_user.id)
-            if not right_table:
-                raise HTTPException(status_code=404, detail="Right table (sheet) not found")
-        elif request.right_table_type == 'transformation':
-            # Validate transformation step exists and is completed
-            right_step = db.query(AITransformationStep).filter(
-                AITransformationStep.id == request.right_table_id,
-                AITransformationStep.project_id == project_id,
-                AITransformationStep.status == 'completed'
-            ).first()
-            if not right_step:
-                raise HTTPException(status_code=404, detail="Right table (transformation step) not found or not completed")
+        right_df = load_table_data(request.right_table_id, request.right_table_type, current_user, db)
+        if right_df is None or right_df.empty:
+            raise HTTPException(status_code=404, detail=f"Right table ({request.right_table_type}) not found or has no data")
         
         # Create join operation
         join_repo = JoinRepository(db)
@@ -2191,99 +2395,15 @@ async def execute_join(project_id: int, join_id: int, current_user: User = Depen
             
             sheet_repo = SheetRepository(db)
             
-            # Get left table data
-            if join_op.left_table_type == 'sheet':
-                left_sheet = sheet_repo.get_sheet_by_id(join_op.left_table_id, current_user.id)
-                if not left_sheet:
-                    raise Exception("Left sheet not found")
-                left_df = fetch_full_sheet_data(left_sheet)
-                if left_df is None or left_df.empty:
-                    raise Exception("Could not fetch data from left sheet. Please check your Google Sheets authentication.")
-            elif join_op.left_table_type == 'transformation':
-                # Get transformation step to find its output table name
-                left_step = db.query(AITransformationStep).filter(
-                    AITransformationStep.id == join_op.left_table_id
-                ).first()
-
-                if not left_step:
-                    raise Exception("Left transformation step not found")
-
-                # Use the custom output_table_name if available
-                if left_step.output_table_name:
-                    left_table_name = left_step.output_table_name
-                else:
-                    # Fallback to default pattern
-                    left_table_name = f"transform_step_{join_op.left_table_id}"
-
-                with engine.connect() as conn:
-                    try:
-                        # First try exact table name
-                        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name = :name"),
-                                            {"name": left_table_name})
-                        exact_match = result.fetchone()
-
-                        if exact_match:
-                            left_df = pd.read_sql_table(left_table_name, conn)
-                        else:
-                            # Fallback to pattern matching for legacy tables
-                            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"),
-                                                {"pattern": f"%transform_step_{join_op.left_table_id}%"})
-                            table_names = [row[0] for row in result.fetchall()]
-                            if table_names:
-                                left_df = pd.read_sql_table(table_names[0], conn)
-                            else:
-                                raise Exception(f"Left transformation output table '{left_table_name}' not found. Please execute the transformation '{left_step.step_name}' first.")
-                    except Exception as e:
-                        if "not found" in str(e).lower() or "no such table" in str(e).lower():
-                            raise Exception(f"Left transformation output table not found. Please execute the transformation '{left_step.step_name}' first.")
-                        raise Exception(f"Error reading left transformation data: {str(e)}")
+            # Get left table data using unified helper
+            left_df = load_table_data(join_op.left_table_id, join_op.left_table_type, current_user, db)
+            if left_df is None or left_df.empty:
+                raise Exception(f"Could not load left table ({join_op.left_table_type}). Please ensure it exists and has data.")
             
-            # Get right table data
-            if join_op.right_table_type == 'sheet':
-                right_sheet = sheet_repo.get_sheet_by_id(join_op.right_table_id, current_user.id)
-                if not right_sheet:
-                    raise Exception("Right sheet not found")
-                right_df = fetch_full_sheet_data(right_sheet)
-                if right_df is None or right_df.empty:
-                    raise Exception("Could not fetch data from right sheet. Please check your Google Sheets authentication.")
-            elif join_op.right_table_type == 'transformation':
-                # Get transformation step to find its output table name
-                right_step = db.query(AITransformationStep).filter(
-                    AITransformationStep.id == join_op.right_table_id
-                ).first()
-
-                if not right_step:
-                    raise Exception("Right transformation step not found")
-
-                # Use the custom output_table_name if available
-                if right_step.output_table_name:
-                    right_table_name = right_step.output_table_name
-                else:
-                    # Fallback to default pattern
-                    right_table_name = f"transform_step_{join_op.right_table_id}"
-
-                with engine.connect() as conn:
-                    try:
-                        # First try exact table name
-                        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name = :name"),
-                                            {"name": right_table_name})
-                        exact_match = result.fetchone()
-
-                        if exact_match:
-                            right_df = pd.read_sql_table(right_table_name, conn)
-                        else:
-                            # Fallback to pattern matching for legacy tables
-                            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"),
-                                                {"pattern": f"%transform_step_{join_op.right_table_id}%"})
-                            table_names = [row[0] for row in result.fetchall()]
-                            if table_names:
-                                right_df = pd.read_sql_table(table_names[0], conn)
-                            else:
-                                raise Exception(f"Right transformation output table '{right_table_name}' not found. Please execute the transformation '{right_step.step_name}' first.")
-                    except Exception as e:
-                        if "not found" in str(e).lower() or "no such table" in str(e).lower():
-                            raise Exception(f"Right transformation output table not found. Please execute the transformation '{right_step.step_name}' first.")
-                        raise Exception(f"Error reading right transformation data: {str(e)}")
+            # Get right table data using unified helper
+            right_df = load_table_data(join_op.right_table_id, join_op.right_table_type, current_user, db)
+            if right_df is None or right_df.empty:
+                raise Exception(f"Could not load right table ({join_op.right_table_type}). Please ensure it exists and has data.")
             
             if left_df is None or right_df is None:
                 raise Exception("Failed to load data for join")
@@ -2446,6 +2566,454 @@ async def delete_join(project_id: int, join_id: int, db: Session = Depends(get_d
             return {"status": "deleted", "message": "Join operation deleted successfully"}
         else:
             raise HTTPException(status_code=404, detail="Join operation not found")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Qualitative Data Endpoints
+@app.post("/projects/{project_id}/qualitative-data")
+async def create_qualitative_data_operation(
+    project_id: int, 
+    request: QualitativeDataCreateRequest, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Create a new qualitative data analysis operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Verify project exists
+        project_repo = TransformationProjectRepository(db)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Validate source table using unified helper
+        available_columns = get_table_columns(request.source_table_id, request.source_table_type, current_user, db)
+        
+        if not available_columns:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Source table ({request.source_table_type}) not found or has no available columns"
+            )
+        
+        # Validate qualitative column exists
+        if request.qualitative_column not in available_columns:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Column '{request.qualitative_column}' not found. Available columns: {available_columns}"
+            )
+        
+        # Additional validation for aggregation column if provided
+        if request.aggregation_column and request.aggregation_column not in available_columns:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Aggregation column '{request.aggregation_column}' not found. Available columns: {available_columns}"
+            )
+        
+        # Additional validation for sentiment column if provided
+        if request.sentiment_column and request.sentiment_column not in available_columns:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Sentiment column '{request.sentiment_column}' not found. Available columns: {available_columns}"
+            )
+        
+        # Validate analysis type
+        if request.analysis_type not in ['sentiment', 'summarization']:
+            raise HTTPException(status_code=400, detail="Invalid analysis_type. Must be 'sentiment' or 'summarization'")
+        
+        # Debug aggregation column
+        print(f"🚀 CREATE DEBUG: aggregation_column = {repr(request.aggregation_column)}")
+        print(f"🚀 CREATE DEBUG: type = {type(request.aggregation_column)}")
+        print(f"🚀 CREATE DEBUG: full request = {request}")
+        
+        # Clean up aggregation_column for database storage
+        clean_aggregation_column = request.aggregation_column
+        if clean_aggregation_column == "":
+            clean_aggregation_column = None
+        print(f"🚀 CREATE DEBUG: cleaned aggregation_column = {repr(clean_aggregation_column)}")
+        
+        # Create qualitative data operation
+        qualitative_repo = QualitativeDataRepository(db)
+        
+        qualitative_op = qualitative_repo.create_qualitative_operation(
+            project_id=project_id,
+            name=request.name,
+            source_table_id=request.source_table_id,
+            source_table_type=request.source_table_type,
+            qualitative_column=request.qualitative_column,
+            analysis_type=request.analysis_type,
+            aggregation_column=clean_aggregation_column,
+            summarize_sentiment_analysis=request.summarize_sentiment_analysis,
+            sentiment_column=request.sentiment_column,
+            canvas_position=request.canvas_position,
+            output_table_name=request.output_table_name
+        )
+        
+        return {
+            "operation_id": qualitative_op.id,
+            "status": "created",
+            "message": "Qualitative data analysis operation created successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/projects/{project_id}/qualitative-data")
+async def get_project_qualitative_operations(
+    project_id: int, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Get all qualitative data operations for a project"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        # Verify project exists
+        project_repo = TransformationProjectRepository(db)
+        project = project_repo.get_project_by_id(current_user.id, project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        qualitative_repo = QualitativeDataRepository(db)
+        operations = qualitative_repo.get_qualitative_operations_by_project(project_id)
+        
+        return {
+            "operations": [{
+                "id": op.id,
+                "name": op.name,
+                "source_table_id": op.source_table_id,
+                "source_table_type": op.source_table_type,
+                "qualitative_column": op.qualitative_column,
+                "analysis_type": op.analysis_type,
+                "aggregation_column": op.aggregation_column,
+                "status": op.status,
+                "error_message": op.error_message,
+                "output_table_name": op.output_table_name,
+                "canvas_position": op.canvas_position,
+                "total_records_processed": op.total_records_processed,
+                "batch_count": op.batch_count,
+                "execution_time_ms": op.execution_time_ms,
+                "created_at": op.created_at.isoformat() if op.created_at else None,
+                "updated_at": op.updated_at.isoformat() if op.updated_at else None
+            } for op in operations]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/projects/{project_id}/qualitative-data/{operation_id}")
+async def update_qualitative_data_operation(
+    project_id: int, 
+    operation_id: int, 
+    request: QualitativeDataUpdateRequest, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Update a qualitative data operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        qualitative_repo = QualitativeDataRepository(db)
+        
+        # Get existing operation
+        operation = qualitative_repo.get_qualitative_operation_by_id(operation_id)
+        if not operation or operation.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Qualitative data operation not found")
+        
+        # Prepare updated values (only update provided fields)
+        name = request.name if request.name is not None else operation.name
+        source_table_id = request.source_table_id if request.source_table_id is not None else operation.source_table_id
+        source_table_type = request.source_table_type if request.source_table_type is not None else operation.source_table_type
+        qualitative_column = request.qualitative_column if request.qualitative_column is not None else operation.qualitative_column
+        analysis_type = request.analysis_type if request.analysis_type is not None else operation.analysis_type
+        aggregation_column = request.aggregation_column if request.aggregation_column is not None else getattr(operation, 'aggregation_column', None)
+        summarize_sentiment_analysis = request.summarize_sentiment_analysis if request.summarize_sentiment_analysis is not None else getattr(operation, 'summarize_sentiment_analysis', False)
+        sentiment_column = request.sentiment_column if request.sentiment_column is not None else getattr(operation, 'sentiment_column', None)
+        output_table_name = request.output_table_name if request.output_table_name is not None else operation.output_table_name
+        
+        # Validate analysis type if provided
+        if request.analysis_type and request.analysis_type not in ['sentiment', 'summarization']:
+            raise HTTPException(status_code=400, detail="Invalid analysis_type. Must be 'sentiment' or 'summarization'")
+        
+        # Update the operation
+        updated_operation = qualitative_repo.update_qualitative_operation(
+            operation_id=operation_id,
+            name=name,
+            source_table_id=source_table_id,
+            source_table_type=source_table_type,
+            qualitative_column=qualitative_column,
+            analysis_type=analysis_type,
+            aggregation_column=aggregation_column,
+            summarize_sentiment_analysis=summarize_sentiment_analysis,
+            sentiment_column=sentiment_column,
+            output_table_name=output_table_name
+        )
+        
+        if updated_operation:
+            return {
+                "status": "updated",
+                "message": "Qualitative data operation updated successfully"
+            }
+        else:
+            raise HTTPException(status_code=404, detail="Qualitative data operation not found")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/projects/{project_id}/qualitative-data/{operation_id}/execute")
+async def execute_qualitative_data_operation(
+    project_id: int, 
+    operation_id: int, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Execute a qualitative data analysis operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        qualitative_repo = QualitativeDataRepository(db)
+        
+        # Get operation
+        operation = qualitative_repo.get_qualitative_operation_by_id(operation_id)
+        if not operation or operation.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Qualitative data operation not found")
+        
+        # Update status to running
+        qualitative_repo.update_qualitative_status(
+            operation_id=operation_id,
+            status='running'
+        )
+        
+        import time
+        start_time = time.time()
+        
+        try:
+            # Get source data using unified helper
+            source_df = load_table_data(operation.source_table_id, operation.source_table_type, current_user, db)
+            
+            if source_df is None or source_df.empty:
+                raise Exception("No data available for analysis")
+            
+            print(f"DEBUG: Source data shape: {source_df.shape}")
+            print(f"DEBUG: Source data columns: {source_df.columns.tolist()}")
+            
+            # Validate column exists
+            if operation.qualitative_column not in source_df.columns:
+                available_cols = list(source_df.columns)
+                raise Exception(f"Column '{operation.qualitative_column}' not found. Available: {available_cols}")
+            
+            print(f"DEBUG: Qualitative column '{operation.qualitative_column}' sample values:\n{source_df[operation.qualitative_column].head()}")
+            print(f"DEBUG: Non-null values in qualitative column: {source_df[operation.qualitative_column].notna().sum()}")
+            print(f"⚡ EXECUTE DEBUG: Aggregation column for analysis: {repr(operation.aggregation_column)}")
+            print(f"⚡ EXECUTE DEBUG: type = {type(operation.aggregation_column)}")
+            
+            # Perform analysis using the service
+            service = get_qualitative_service()
+            analysis_result = await service.analyze_qualitative_data(
+                df=source_df,
+                text_column=operation.qualitative_column,
+                analysis_type=operation.analysis_type,
+                aggregation_column=operation.aggregation_column,
+                summarize_sentiment_analysis=getattr(operation, 'summarize_sentiment_analysis', False),
+                sentiment_column=getattr(operation, 'sentiment_column', None)
+            )
+            
+            if not analysis_result.get('success'):
+                raise Exception(analysis_result.get('error', 'Analysis failed'))
+            
+            # Save result to database
+            result_df = analysis_result['output_data']
+            
+            print(f"DEBUG: Analysis result shape: {result_df.shape}")
+            print(f"DEBUG: Analysis result columns: {result_df.columns.tolist()}")
+            print(f"DEBUG: First few result rows:\n{result_df.head()}")
+            
+            # Generate output table name using same logic as AI transformations
+            if operation.output_table_name:
+                # Use custom table name if provided
+                import re
+                output_table_name = re.sub(r'[^\w]', '_', operation.output_table_name.lower())
+            else:
+                # Use default pattern
+                output_table_name = f"qualitative_{operation.analysis_type}_{operation.id}_{int(time.time())}"
+            
+            print(f"DEBUG: Saving result to table: {output_table_name}")
+            
+            # Store result in database
+            result_df.to_sql(output_table_name, engine, if_exists='replace', index=False)
+            
+            print(f"DEBUG: Successfully saved {len(result_df)} rows to database")
+            
+            # Calculate execution time
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            
+            # Update operation status
+            # Try to use new field, fall back to old field for compatibility
+            try:
+                qualitative_repo.update_qualitative_status(
+                    operation_id=operation_id,
+                    status='completed',
+                    actual_table_name=output_table_name,
+                    output_columns=list(result_df.columns),
+                    execution_time_ms=execution_time_ms,
+                    total_records=analysis_result.get('total_records', len(source_df)),
+                    batch_count=analysis_result.get('batch_count', 1)
+                )
+            except Exception as e:
+                print(f"DEBUG: New field update failed, using old method: {e}")
+                # Fallback to old method without actual_table_name
+                qualitative_repo.update_qualitative_status(
+                    operation_id=operation_id,
+                    status='completed',
+                    output_columns=list(result_df.columns),
+                    execution_time_ms=execution_time_ms,
+                    total_records=analysis_result.get('total_records', len(source_df)),
+                    batch_count=analysis_result.get('batch_count', 1)
+                )
+            
+            return {
+                "status": "completed",
+                "message": "Qualitative data analysis completed successfully",
+                "output_table_name": output_table_name,
+                "total_records_processed": analysis_result.get('total_records', len(source_df)),
+                "analysis_type": operation.analysis_type,
+                "execution_time_ms": execution_time_ms,
+                "batch_count": analysis_result.get('batch_count', 1)
+            }
+            
+        except Exception as e:
+            # Update status to failed
+            qualitative_repo.update_qualitative_status(
+                operation_id=operation_id,
+                status='failed',
+                error_message=str(e)
+            )
+            raise Exception(f"Analysis failed: {str(e)}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/projects/{project_id}/qualitative-data/{operation_id}/data")
+async def get_qualitative_data_results(
+    project_id: int, 
+    operation_id: int, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Get results from a qualitative data analysis operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        qualitative_repo = QualitativeDataRepository(db)
+        
+        # Get operation
+        operation = qualitative_repo.get_qualitative_operation_by_id(operation_id)
+        if not operation or operation.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Qualitative data operation not found")
+        
+        if operation.status != 'completed':
+            raise HTTPException(status_code=400, detail="Operation not completed yet")
+        
+        # Use actual_table_name if available, otherwise fall back to output_table_name
+        table_name = getattr(operation, 'actual_table_name', None) or operation.output_table_name
+        if not table_name:
+            raise HTTPException(status_code=404, detail="No output data available")
+        
+        # Load data from warehouse
+        try:
+            df = pd.read_sql_table(table_name, engine)
+            
+            print(f"DEBUG: Loaded qualitative data table '{table_name}'")
+            print(f"DEBUG: DataFrame shape: {df.shape}")
+            print(f"DEBUG: DataFrame columns: {df.columns.tolist()}")
+            print(f"DEBUG: First few rows:\n{df.head()}")
+            
+            # Convert DataFrame to the format expected by DataViewer (same as AI transformations)
+            columns = df.columns.tolist()
+            data_rows = []
+            
+            # Convert DataFrame rows to list of lists, handling various data types
+            for _, row in df.iterrows():
+                row_data = []
+                for value in row:
+                    if pd.isna(value):
+                        row_data.append(None)
+                    elif isinstance(value, (int, float)):
+                        row_data.append(value)
+                    else:
+                        row_data.append(str(value))
+                data_rows.append(row_data)
+            
+            print(f"DEBUG: Converted to {len(data_rows)} data rows")
+            if data_rows:
+                print(f"DEBUG: First row: {data_rows[0]}")
+            
+            return {
+                "columns": columns,
+                "data": data_rows,
+                "total_rows": len(data_rows),
+                "table_name": operation.output_table_name or getattr(operation, 'actual_table_name', None) or table_name,
+                "analysis_type": operation.analysis_type,
+                "operation_name": operation.name
+            }
+            
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to load results: {str(e)}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/projects/{project_id}/qualitative-data/{operation_id}")
+async def delete_qualitative_data_operation(
+    project_id: int, 
+    operation_id: int, 
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Delete a qualitative data operation"""
+    try:
+        if 'default' not in user_credentials:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        qualitative_repo = QualitativeDataRepository(db)
+        operation = qualitative_repo.get_qualitative_operation_by_id(operation_id)
+        
+        if not operation or operation.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Qualitative data operation not found")
+        
+        # Delete output table if it exists
+        if operation.output_table_name:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f"DROP TABLE IF EXISTS {operation.output_table_name}"))
+                    conn.commit()
+            except Exception:
+                pass  # Ignore errors dropping table
+        
+        # Delete operation
+        success = qualitative_repo.delete_qualitative_operation(operation_id)
+        if success:
+            return {"status": "deleted", "message": "Qualitative data operation deleted successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="Qualitative data operation not found")
         
     except HTTPException:
         raise
@@ -2713,6 +3281,33 @@ async def delete_project(project_id: int, current_user: User = Depends(get_curre
                     print(f"Warning: Failed to drop join table {join.output_table_name}: {e}")
             
             join_repo.delete_join(join.id)
+        
+        # Delete qualitative data operations and their output tables
+        qualitative_repo = QualitativeDataRepository(db)
+        qualitative_operations = qualitative_repo.get_qualitative_operations_by_project(project_id)
+        for operation in qualitative_operations:
+            # Delete output table if it exists
+            if operation.output_table_name:
+                try:
+                    with engine.connect() as conn:
+                        conn.execute(text(f"DROP TABLE IF EXISTS {operation.output_table_name}"))
+                        conn.commit()
+                except Exception as e:
+                    print(f"Warning: Failed to drop qualitative table {operation.output_table_name}: {e}")
+            
+            qualitative_repo.delete_qualitative_operation(operation.id)
+        
+        # Delete canvas layout data (nodes and connections)
+        canvas_nodes = db.query(CanvasNode).filter(CanvasNode.project_id == project_id).all()
+        for node in canvas_nodes:
+            db.delete(node)
+        
+        canvas_connections = db.query(CanvasConnection).filter(CanvasConnection.project_id == project_id).all()
+        for connection in canvas_connections:
+            db.delete(connection)
+        
+        # Commit all deletions so far
+        db.commit()
 
         # Delete project charts (cascade handled by database relationship)
         chart_repo = ChartRepository(db)
@@ -3177,50 +3772,8 @@ async def execute_all_transformations(project_id: int, current_user: User = Depe
                 step.error_message = None
                 db.commit()
                 
-                # Get upstream data (from sheets and previous transformations)
-                sheet_data = {}
-                
-                # Add original sheet data
-                if step.upstream_sheet_ids:
-                    sheet_repo = SheetRepository(db)
-                    for sheet_id in step.upstream_sheet_ids:
-                        sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
-                        if sheet and sheet.sample_data and sheet.columns:
-                            df_data = {}
-                            for i, col in enumerate(sheet.columns):
-                                column_data = []
-                                for row in sheet.sample_data:
-                                    if i < len(row):
-                                        column_data.append(row[i])
-                                    else:
-                                        column_data.append(None)
-                                df_data[col] = column_data
-                            sheet_data[f'sheet_{sheet_id}'] = pd.DataFrame(df_data)
-                
-                # Add previous transformation results
-                if step.upstream_step_ids:
-                    for upstream_step_id in step.upstream_step_ids:
-                        upstream_step = db.query(AITransformationStep).filter(
-                            AITransformationStep.id == upstream_step_id,
-                            AITransformationStep.status == 'completed'
-                        ).first()
-                        
-                        if upstream_step and upstream_step.code_explanation:
-                            # Extract table name
-                            table_name = None
-                            if "Output table:" in upstream_step.code_explanation:
-                                lines = upstream_step.code_explanation.split('\n')
-                                for line in lines:
-                                    if line.startswith("Output table:"):
-                                        table_name = line.split(":", 1)[1].strip()
-                                        break
-                            
-                            if table_name:
-                                try:
-                                    upstream_df = pd.read_sql_table(table_name, engine)
-                                    sheet_data[f'transform_{upstream_step_id}'] = upstream_df
-                                except Exception as e:
-                                    print(f"Could not load upstream table {table_name}: {e}")
+                # Get upstream data using unified helper function
+                sheet_data = load_upstream_data(step, current_user, db)
                 
                 # Set the main df for transformation
                 df = None
@@ -3346,59 +3899,45 @@ async def get_project_data_sources(project_id: int, current_user: User = Depends
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        data_sources = []
+        # Use the unified table discovery method
+        data_sources = project_repo.get_all_available_tables(current_user.id, project_id)
         
-        # Add original sheets as data sources
-        sheet_repo = SheetRepository(db)
-        for sheet_id in project.sheet_ids:
-            sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
-            if sheet:
-                data_sources.append({
-                    "id": f"sheet_{sheet_id}",
-                    "name": sheet.title,
-                    "type": "sheet",
-                    "source_type": "original",
-                    "columns": sheet.columns,
-                    "row_count": sheet.total_rows
-                })
-        
-        # Add transformed tables as data sources
-        transformation_steps = db.query(AITransformationStep).filter(
-            AITransformationStep.project_id == project_id,
-            AITransformationStep.status == 'completed'
-        ).all()
-        
-        for step in transformation_steps:
-            # Extract table name from code_explanation (temporary approach)
-            table_name = None
-            if step.code_explanation and "Output table:" in step.code_explanation:
-                lines = step.code_explanation.split('\n')
-                for line in lines:
-                    if line.startswith("Output table:"):
-                        table_name = line.split(":", 1)[1].strip()
-                        break
+        # Format for backward compatibility
+        formatted_sources = []
+        for source in data_sources:
+            formatted_source = {
+                "id": f"{source['type']}_{source['id']}",
+                "name": source['name'],
+                "type": source['type'],
+                "source_type": "original" if source['type'] == 'sheet' else "transformed",
+                "columns": source['columns'],
+                "status": source['status']
+            }
             
-            if table_name:
-                # Try to get table info from SQLite
+            # Add table_name for non-sheet sources
+            if 'table_name' in source:
+                formatted_source['table_name'] = source['table_name']
+                
+            # Try to get row count for database tables
+            if source['type'] != 'sheet' and 'table_name' in source:
                 try:
-                    import pandas as pd
-                    result = engine.execute(f"SELECT COUNT(*) as count FROM {table_name}")
-                    row_count = result.fetchone()[0]
-                    
-                    data_sources.append({
-                        "id": f"transform_{step.id}",
-                        "name": f"{step.step_name} (Transformed)",
-                        "type": "transformed_table",
-                        "source_type": "transformed",
-                        "table_name": table_name,
-                        "columns": step.output_columns or [],
-                        "row_count": row_count,
-                        "step_id": step.id
-                    })
+                    with engine.connect() as conn:
+                        result = conn.execute(text(f"SELECT COUNT(*) as count FROM \"{source['table_name']}\""))
+                        row_count = result.fetchone()[0]
+                        formatted_source['row_count'] = row_count
                 except Exception as e:
-                    print(f"Could not get info for table {table_name}: {e}")
+                    print(f"Could not get row count for table {source.get('table_name', 'unknown')}: {e}")
+                    formatted_source['row_count'] = 0
+            elif source['type'] == 'sheet':
+                # For sheets, we can add row count from the sheet data
+                sheet_repo = SheetRepository(db)
+                sheet = sheet_repo.get_sheet_by_id(source['id'], current_user.id)
+                if sheet:
+                    formatted_source['row_count'] = sheet.total_rows
+            
+            formatted_sources.append(formatted_source)
         
-        return {"data_sources": data_sources}
+        return {"data_sources": formatted_sources}
         
     except HTTPException:
         raise
@@ -3675,6 +4214,7 @@ async def create_ai_transformation_step(
             output_columns=ai_result['estimated_output_columns'],
             upstream_step_ids=request.upstream_step_ids or [],
             upstream_sheet_ids=request.upstream_sheet_ids or [],
+            upstream_tables=request.upstream_tables or [],
             canvas_position=request.canvas_position or {"x": 0, "y": 0},
             execution_order=0,  # Will be calculated based on dependencies
             status='draft',
@@ -3873,47 +4413,8 @@ async def execute_transformation_step(step_id: int, current_user: User = Depends
         db.commit()
         
         try:
-            # Get upstream data (from sheets) - use full data from warehouse, not just samples
-            sheet_data = {}
-            if step.upstream_sheet_ids:
-                sheet_repo = SheetRepository(db)
-                for sheet_id in step.upstream_sheet_ids:
-                    sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
-                    if sheet:
-                        # Get full data from warehouse table for this sheet if it exists
-                        project = db.query(TransformationProject).filter(
-                            TransformationProject.id == step.project_id
-                        ).first()
-                        
-                        # Get full data from warehouse (much faster than Google Sheets API)
-                        df = None
-                        try:
-                            # Use warehouse data instead of Google Sheets API calls
-                            df = fetch_full_sheet_data(sheet)
-                            if df is not None and not df.empty:
-                                pass
-                            else:
-                                pass
-                        except Exception as e:
-                            pass
-                        
-                        # Fallback to sample data only if Google Sheets fetch fails
-                        if df is None or df.empty:
-                            if sheet.sample_data and sheet.columns:
-                                pass
-                            df_data = {}
-                            for i, col in enumerate(sheet.columns):
-                                column_data = []
-                                for row in sheet.sample_data:
-                                    if i < len(row):
-                                        column_data.append(row[i])
-                                    else:
-                                        column_data.append(None)
-                                df_data[col] = column_data
-                            df = pd.DataFrame(df_data)
-                        
-                        if df is not None:
-                            sheet_data[f'sheet_{sheet_id}'] = df
+            # Get upstream data using unified helper function
+            sheet_data = load_upstream_data(step, current_user, db)
             
             # If we have sheet data, use the first one as 'df' for the transformation
             df = None
@@ -4757,6 +5258,58 @@ async def get_ai_providers():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting AI providers: {str(e)}")
+
+@app.get("/projects/{project_id}/table-columns/{table_id}")
+async def get_table_columns_endpoint(
+    project_id: int,
+    table_id: int,
+    table_type: str,
+    db: Session = Depends(get_db)
+):
+    """Get columns for a specific table"""
+    print(f"DEBUG: get_table_columns_endpoint called with project_id={project_id}, table_id={table_id}, table_type={table_type}")
+    try:
+        # Check auth
+        if 'default' not in user_credentials:
+            print("DEBUG: No default user in credentials")
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        print(f"DEBUG: user_credentials = {user_credentials}")
+        print(f"DEBUG: user_credentials['default'] = {user_credentials['default']}")
+        
+        # Create a user object with the authenticated user id
+        user_data = user_credentials['default']
+        user_id = user_data.get('user_id') or user_data.get('id') or 1
+        current_user = type('User', (), {'id': user_id})()
+        print(f"DEBUG: Created user with id: {current_user.id}")
+        
+        # Get columns using the unified helper function
+        print(f"DEBUG: Fetching columns for table_id={table_id}, table_type={table_type}")
+        columns = get_table_columns(table_id, table_type, current_user, db)
+        print(f"DEBUG: Found columns: {columns}")
+        
+        if not columns:
+            print(f"DEBUG: No columns found for table_id={table_id}, table_type={table_type}")
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Table not found or has no columns (type: {table_type}, id: {table_id})"
+            )
+        
+        return {"columns": columns}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"DEBUG: Exception in get_table_columns_endpoint: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/test-endpoint")
+async def test_endpoint():
+    """Test endpoint to verify routing works"""
+    print("DEBUG: Test endpoint called!")
+    return {"message": "Test endpoint works"}
 
 if __name__ == "__main__":
     import uvicorn

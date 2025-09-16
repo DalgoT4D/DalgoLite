@@ -105,13 +105,15 @@ class AITransformationStep(Base):
     step_name = Column(String, nullable=False)
     user_prompt = Column(Text, nullable=False)  # Natural language description
     output_table_name = Column(String)  # Custom output table name
+    actual_table_name = Column(String)  # Actual database table name (auto-generated)
     generated_code = Column(Text, nullable=False)  # AI-generated pandas code
     code_summary = Column(String)  # One-sentence summary
     code_explanation = Column(Text)  # Detailed explanation
     input_columns = Column(JSON)  # Expected input columns
     output_columns = Column(JSON)  # Expected output columns after transformation
-    upstream_step_ids = Column(JSON)  # IDs of upstream transformation steps
-    upstream_sheet_ids = Column(JSON)  # IDs of upstream sheets
+    upstream_step_ids = Column(JSON)  # IDs of upstream transformation steps (legacy)
+    upstream_sheet_ids = Column(JSON)  # IDs of upstream sheets (legacy)
+    upstream_tables = Column(JSON)  # Unified upstream tables: [{"id": 1, "type": "sheet"}, {"id": 2, "type": "transformation"}]
     canvas_position = Column(JSON)  # Position on canvas (x, y coordinates)
     execution_order = Column(Integer, default=0)  # Order of execution in pipeline
     status = Column(String, default='draft')  # draft, ready, running, completed, failed
@@ -188,6 +190,7 @@ class JoinOperation(Base):
     status = Column(String, default='pending')  # 'pending', 'completed', 'failed'
     error_message = Column(Text)
     output_table_name = Column(String)  # Generated result table name
+    actual_table_name = Column(String)  # Actual database table name (auto-generated)
     output_columns = Column(JSON)  # Resulting columns after join
     canvas_position = Column(JSON)  # Position on canvas (x, y coordinates)
     execution_time_ms = Column(Integer)
@@ -226,6 +229,37 @@ class PipelineExecutionHistory(Base):
     total_sheets = Column(Integer, default=0)
     rows_processed = Column(Integer, nullable=True)
     duration_seconds = Column(Integer, nullable=True)
+    
+    # Relationships
+    project = relationship("TransformationProject")
+
+class QualitativeDataOperation(Base):
+    __tablename__ = "qualitative_data_operations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("transformation_projects.id"), nullable=False)
+    name = Column(String, nullable=False)
+    source_table_id = Column(Integer, nullable=False)  # Sheet or transformation step ID
+    source_table_type = Column(String, nullable=False)  # 'sheet' or 'transformation'
+    qualitative_column = Column(String, nullable=False)  # Column containing qualitative data
+    analysis_type = Column(String, nullable=False)  # 'sentiment' or 'summarization'
+    aggregation_column = Column(String)  # Optional column for group-by summarization
+    # Sentiment analysis options for summarization
+    summarize_sentiment_analysis = Column(Boolean, default=False)  # Whether to include sentiment stats
+    sentiment_column = Column(String)  # Column containing sentiment analysis results
+    status = Column(String, default='pending')  # 'pending', 'running', 'completed', 'failed'
+    error_message = Column(Text)
+    output_table_name = Column(String)  # User-configured custom table name
+    actual_table_name = Column(String)  # Actual database table name (auto-generated)
+    output_columns = Column(JSON)  # Resulting columns after analysis
+    canvas_position = Column(JSON)  # Position on canvas (x, y coordinates)
+    execution_time_ms = Column(Integer)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    # Analysis results (for completed operations)
+    total_records_processed = Column(Integer)
+    batch_count = Column(Integer)
     
     # Relationships
     project = relationship("TransformationProject")
@@ -377,6 +411,72 @@ def migrate_database():
                     conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_def}"))
                 conn.commit()
             print("Users table columns added successfully")
+
+    # Check if we need to migrate qualitative_data_operations table
+    if 'qualitative_data_operations' in existing_tables:
+        existing_columns = [col['name'] for col in inspector.get_columns('qualitative_data_operations')]
+        
+        # Add actual_table_name column if it doesn't exist
+        if 'actual_table_name' not in existing_columns:
+            print("Adding actual_table_name column to qualitative_data_operations table...")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE qualitative_data_operations ADD COLUMN actual_table_name TEXT"))
+                conn.commit()
+            print("Qualitative data operations table migration completed successfully")
+        
+        # Add aggregation_column if it doesn't exist
+        if 'aggregation_column' not in existing_columns:
+            print("Adding aggregation_column to qualitative_data_operations table...")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE qualitative_data_operations ADD COLUMN aggregation_column TEXT"))
+                conn.commit()
+            print("Aggregation column migration completed successfully")
+        
+        # Add sentiment analysis columns if they don't exist
+        sentiment_columns = [
+            ('summarize_sentiment_analysis', 'BOOLEAN DEFAULT 0'),
+            ('sentiment_column', 'TEXT')
+        ]
+        
+        with engine.connect() as conn:
+            for col_name, col_def in sentiment_columns:
+                if col_name not in existing_columns:
+                    print(f"Adding {col_name} to qualitative_data_operations table...")
+                    conn.execute(text(f"ALTER TABLE qualitative_data_operations ADD COLUMN {col_name} {col_def}"))
+                    conn.commit()
+        print("Sentiment analysis columns migration completed successfully")
+
+    # Check if we need to migrate ai_transformation_steps table
+    if 'ai_transformation_steps' in existing_tables:
+        existing_columns = [col['name'] for col in inspector.get_columns('ai_transformation_steps')]
+        
+        # Add actual_table_name column if it doesn't exist
+        if 'actual_table_name' not in existing_columns:
+            print("Adding actual_table_name column to ai_transformation_steps table...")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE ai_transformation_steps ADD COLUMN actual_table_name TEXT"))
+                conn.commit()
+            print("AI transformation steps table migration completed successfully")
+        
+        # Add upstream_tables column if it doesn't exist
+        if 'upstream_tables' not in existing_columns:
+            print("Adding upstream_tables column to ai_transformation_steps table...")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE ai_transformation_steps ADD COLUMN upstream_tables TEXT"))
+                conn.commit()
+            print("Upstream tables column added successfully")
+
+    # Check if we need to migrate join_operations table
+    if 'join_operations' in existing_tables:
+        existing_columns = [col['name'] for col in inspector.get_columns('join_operations')]
+        
+        # Add actual_table_name column if it doesn't exist
+        if 'actual_table_name' not in existing_columns:
+            print("Adding actual_table_name column to join_operations table...")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE join_operations ADD COLUMN actual_table_name TEXT"))
+                conn.commit()
+            print("Join operations table migration completed successfully")
 
     # Create any new tables
     Base.metadata.create_all(bind=engine)
@@ -551,6 +651,71 @@ class TransformationProjectRepository:
         return self.db.query(TransformationProject).filter(
             TransformationProject.user_id == user_id
         ).order_by(TransformationProject.created_at.desc()).all()
+
+    def get_all_available_tables(self, user_id: int, project_id: int) -> List[Dict[str, Any]]:
+        """Get all available tables from sheets and transformation operations for a project"""
+        available_tables = []
+        
+        # Get all sheets for the user
+        sheets = self.db.query(ConnectedSheet).filter(ConnectedSheet.user_id == user_id).all()
+        for sheet in sheets:
+            available_tables.append({
+                'id': sheet.id,
+                'name': sheet.title,
+                'type': 'sheet',
+                'columns': sheet.columns or [],
+                'status': 'completed'  # Sheets are always available
+            })
+        
+        # Get all completed AI transformation steps for this project
+        ai_steps = self.db.query(AITransformationStep).filter(
+            AITransformationStep.project_id == project_id,
+            AITransformationStep.status == 'completed'
+        ).all()
+        for step in ai_steps:
+            table_name = getattr(step, 'actual_table_name', None) or step.output_table_name or f"transformation_{step.id}"
+            available_tables.append({
+                'id': step.id,
+                'name': step.step_name,
+                'type': 'transformation',
+                'columns': step.output_columns or [],
+                'status': step.status,
+                'table_name': table_name
+            })
+        
+        # Get all completed join operations for this project
+        join_ops = self.db.query(JoinOperation).filter(
+            JoinOperation.project_id == project_id,
+            JoinOperation.status == 'completed'
+        ).all()
+        for join_op in join_ops:
+            table_name = getattr(join_op, 'actual_table_name', None) or join_op.output_table_name or f"join_{join_op.id}"
+            available_tables.append({
+                'id': join_op.id,
+                'name': join_op.name,
+                'type': 'join',
+                'columns': join_op.output_columns or [],
+                'status': join_op.status,
+                'table_name': table_name
+            })
+        
+        # Get all completed qualitative data operations for this project
+        qual_ops = self.db.query(QualitativeDataOperation).filter(
+            QualitativeDataOperation.project_id == project_id,
+            QualitativeDataOperation.status == 'completed'
+        ).all()
+        for qual_op in qual_ops:
+            table_name = getattr(qual_op, 'actual_table_name', None) or qual_op.output_table_name or f"qualitative_{qual_op.id}"
+            available_tables.append({
+                'id': qual_op.id,
+                'name': qual_op.name,
+                'type': 'qualitative',
+                'columns': qual_op.output_columns or [],
+                'status': qual_op.status,
+                'table_name': table_name
+            })
+        
+        return available_tables
     
     def get_project_by_id(self, user_id: int, project_id: int) -> Optional[TransformationProject]:
         return self.db.query(TransformationProject).filter(
@@ -657,6 +822,108 @@ class JoinRepository:
         join_op = self.get_join_by_id(join_id)
         if join_op:
             self.db.delete(join_op)
+            self.db.commit()
+            return True
+        return False
+
+class QualitativeDataRepository:
+    def __init__(self, db: Session):
+        self.db = db
+    
+    def create_qualitative_operation(self, project_id: int, name: str, source_table_id: int,
+                                   source_table_type: str, qualitative_column: str, 
+                                   analysis_type: str, canvas_position: Optional[Dict] = None,
+                                   output_table_name: Optional[str] = None,
+                                   aggregation_column: Optional[str] = None,
+                                   summarize_sentiment_analysis: Optional[bool] = None,
+                                   sentiment_column: Optional[str] = None) -> QualitativeDataOperation:
+        qualitative_op = QualitativeDataOperation(
+            project_id=project_id,
+            name=name,
+            source_table_id=source_table_id,
+            source_table_type=source_table_type,
+            qualitative_column=qualitative_column,
+            analysis_type=analysis_type,
+            aggregation_column=aggregation_column,
+            summarize_sentiment_analysis=summarize_sentiment_analysis or False,
+            sentiment_column=sentiment_column,
+            canvas_position=canvas_position or {"x": 0, "y": 0},
+            status='pending',
+            output_table_name=output_table_name
+        )
+        self.db.add(qualitative_op)
+        self.db.commit()
+        self.db.refresh(qualitative_op)
+        return qualitative_op
+    
+    def get_qualitative_operations_by_project(self, project_id: int) -> List[QualitativeDataOperation]:
+        return self.db.query(QualitativeDataOperation).filter(
+            QualitativeDataOperation.project_id == project_id
+        ).order_by(QualitativeDataOperation.created_at.desc()).all()
+    
+    def get_qualitative_operation_by_id(self, operation_id: int) -> Optional[QualitativeDataOperation]:
+        return self.db.query(QualitativeDataOperation).filter(
+            QualitativeDataOperation.id == operation_id
+        ).first()
+    
+    def update_qualitative_status(self, operation_id: int, status: str, error_message: str = None,
+                                output_columns: List[str] = None, execution_time_ms: int = None,
+                                actual_table_name: str = None, total_records: int = None,
+                                batch_count: int = None) -> Optional[QualitativeDataOperation]:
+        qualitative_op = self.get_qualitative_operation_by_id(operation_id)
+        if qualitative_op:
+            qualitative_op.status = status
+            if error_message:
+                qualitative_op.error_message = error_message
+            if output_columns:
+                qualitative_op.output_columns = output_columns
+            if execution_time_ms:
+                qualitative_op.execution_time_ms = execution_time_ms
+            if actual_table_name:
+                # Only set if the field exists
+                if hasattr(qualitative_op, 'actual_table_name'):
+                    qualitative_op.actual_table_name = actual_table_name
+                else:
+                    # Fallback for older database schema
+                    print(f"DEBUG: actual_table_name field not available, skipping")
+            if total_records:
+                qualitative_op.total_records_processed = total_records
+            if batch_count:
+                qualitative_op.batch_count = batch_count
+            qualitative_op.updated_at = datetime.now(timezone.utc)
+            self.db.commit()
+            self.db.refresh(qualitative_op)
+            return qualitative_op
+        return None
+    
+    def update_qualitative_operation(self, operation_id: int, name: str, source_table_id: int,
+                                   source_table_type: str, qualitative_column: str,
+                                   analysis_type: str, aggregation_column: Optional[str] = None,
+                                   output_table_name: Optional[str] = None,
+                                   summarize_sentiment_analysis: Optional[bool] = None,
+                                   sentiment_column: Optional[str] = None) -> Optional[QualitativeDataOperation]:
+        qualitative_op = self.get_qualitative_operation_by_id(operation_id)
+        if qualitative_op:
+            qualitative_op.name = name
+            qualitative_op.source_table_id = source_table_id
+            qualitative_op.source_table_type = source_table_type
+            qualitative_op.qualitative_column = qualitative_column
+            qualitative_op.analysis_type = analysis_type
+            qualitative_op.aggregation_column = aggregation_column
+            qualitative_op.output_table_name = output_table_name
+            if summarize_sentiment_analysis is not None:
+                qualitative_op.summarize_sentiment_analysis = summarize_sentiment_analysis
+            qualitative_op.sentiment_column = sentiment_column
+            qualitative_op.updated_at = datetime.now(timezone.utc)
+            
+            self.db.commit()
+            return qualitative_op
+        return None
+    
+    def delete_qualitative_operation(self, operation_id: int) -> bool:
+        qualitative_op = self.get_qualitative_operation_by_id(operation_id)
+        if qualitative_op:
+            self.db.delete(qualitative_op)
             self.db.commit()
             return True
         return False

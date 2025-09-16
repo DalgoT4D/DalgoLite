@@ -27,6 +27,7 @@ interface ChartData {
   data: any
   options: any
   chart_name: string
+  chart_config?: any
 }
 
 export default function ChartViewPage({ params }: { params: { id: string } }) {
@@ -242,27 +243,56 @@ export default function ChartViewPage({ params }: { params: { id: string } }) {
             {/* Chart Details */}
             <div className="mb-6 pb-4 border-b border-gray-100">
               <div className="flex items-center gap-6 text-sm text-gray-600">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">X-Axis:</span>
-                  <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                    {chart.x_axis_column}
-                  </span>
-                </div>
-                {chart.y_axis_column && (
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">Y-Axis:</span>
-                    <span className="bg-green-100 text-green-800 px-2 py-1 rounded">
-                      {chart.y_axis_column}
-                    </span>
-                  </div>
-                )}
-                {chart.chart_config?.aggregation_type && (
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">Aggregation:</span>
-                    <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded capitalize">
-                      {chart.chart_config.aggregation_type}
-                    </span>
-                  </div>
+                {chart.chart_type === 'table' ? (
+                  // Table chart details
+                  <>
+                    {chart.chart_config?.selected_columns && chart.chart_config.selected_columns.length > 0 && (
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">Selected Columns:</span>
+                        <div className="flex flex-wrap gap-1">
+                          {chart.chart_config.selected_columns.map((col: string, idx: number) => (
+                            <span key={idx} className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs">
+                              {col}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {(!chart.chart_config?.selected_columns || chart.chart_config.selected_columns.length === 0) && (
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">Columns:</span>
+                        <span className="bg-gray-100 text-gray-800 px-2 py-1 rounded">
+                          All columns
+                        </span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  // Regular chart details
+                  <>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">X-Axis:</span>
+                      <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                        {chart.x_axis_column}
+                      </span>
+                    </div>
+                    {chart.y_axis_column && (
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">Y-Axis:</span>
+                        <span className="bg-green-100 text-green-800 px-2 py-1 rounded">
+                          {chart.y_axis_column}
+                        </span>
+                      </div>
+                    )}
+                    {chart.chart_config?.aggregation_type && (
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">Aggregation:</span>
+                        <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded capitalize">
+                          {chart.chart_config.aggregation_type}
+                        </span>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -273,6 +303,7 @@ export default function ChartViewPage({ params }: { params: { id: string } }) {
                 ref={chartRef}
                 type={chartData.chart_type}
                 data={chartData.data}
+                selectedColumns={chartData.chart_config?.selected_columns}
                 options={{
                   ...chartData.options,
                   responsive: true,
