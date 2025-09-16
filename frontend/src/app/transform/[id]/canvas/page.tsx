@@ -267,6 +267,19 @@ export default function ProjectCanvasPage() {
     }
   }
 
+  const handleTransformationCreated = async () => {
+    try {
+      // Refresh transformation steps
+      const transformationResponse = await fetch(getApiUrl(`/projects/${projectId}/transformation-steps`))
+      if (transformationResponse.ok) {
+        const transformationData = await transformationResponse.json()
+        setTransformationSteps(transformationData.steps || [])
+      }
+    } catch (err) {
+      console.error('Error refreshing transformation steps:', err)
+    }
+  }
+
   const handleQualitativeDataCreated = async () => {
     try {
       // Refresh qualitative data operations
@@ -371,6 +384,7 @@ export default function ProjectCanvasPage() {
             onExecuteStep={handleExecuteStep}
             onExecuteAll={handleExecuteAll}
             onDeleteTransformationStep={handleDeleteTransformationStep}
+            onTransformationCreated={handleTransformationCreated}
             onQualitativeDataCreated={handleQualitativeDataCreated}
           />
         </div>

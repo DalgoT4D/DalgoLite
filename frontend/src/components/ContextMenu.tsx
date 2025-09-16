@@ -46,7 +46,7 @@ export default function ContextMenu({
 
   const menuItems = [
     {
-      label: 'Create AI Transformation',
+      label: 'Create Transformation',
       icon: Zap,
       onClick: () => {
         onCreateAITransformation()

@@ -240,9 +240,18 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
           <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-100">
             <div className="flex items-center gap-1">
               <button
-                onClick={() => onEdit && onEdit(operation.id)}
-                className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
-                title="Edit qualitative operation"
+                onClick={() => onEdit && operation.status !== 'running' && onEdit(operation.id)}
+                className={`p-2 rounded transition-colors ${
+                  operation.status === 'running'
+                    ? 'text-gray-400 cursor-not-allowed'
+                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                }`}
+                title={
+                  operation.status === 'running'
+                    ? "Cannot edit while operation is running"
+                    : "Edit qualitative operation"
+                }
+                disabled={operation.status === 'running'}
               >
                 <Edit3 size={14} />
               </button>

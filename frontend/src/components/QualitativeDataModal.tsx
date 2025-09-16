@@ -376,7 +376,7 @@ export default function QualitativeDataModal({
           {analysisType === 'summarization' && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
-                Aggregation Column (Optional)
+                Group Summary by (Optional)
                 <div className="group relative">
                   <Info size={14} className="text-gray-400 cursor-help" />
                   <div className="absolute left-0 bottom-6 hidden group-hover:block bg-gray-800 text-white text-xs rounded-lg px-3 py-2 w-64 z-10">
@@ -411,6 +411,7 @@ export default function QualitativeDataModal({
           )}
 
           {/* Sentiment Analysis Options - Only show for summarization */}
+          {/* COMMENTED OUT: Remove sentiment analysis option from UI while keeping backend functionality 
           {analysisType === 'summarization' && (
             <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
               <div className="flex items-center gap-3 mb-3">
@@ -462,6 +463,7 @@ export default function QualitativeDataModal({
               )}
             </div>
           )}
+          */}
 
           {/* Analysis Type Description */}
           {analysisType && (
