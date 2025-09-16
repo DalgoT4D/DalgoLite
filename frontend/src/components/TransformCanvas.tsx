@@ -37,6 +37,8 @@ interface QualitativeDataOperation {
   qualitative_column: string
   analysis_type: string
   aggregation_column?: string
+  summarize_sentiment_analysis?: boolean
+  sentiment_column?: string
   status: 'pending' | 'running' | 'completed' | 'failed'
   error_message?: string
   output_table_name?: string
@@ -412,13 +414,9 @@ export default function TransformCanvas({
                       throw new Error('Selected tables not found')
                     }
                     
-                    // Determine if table is a sheet or transformation
-                    const leftTableType = joinConfig.leftTable >= 10000 ? 'transformation' : 'sheet'
-                    const rightTableType = joinConfig.rightTable >= 10000 ? 'transformation' : 'sheet'
-                    
-                    // Adjust IDs back to original values
-                    const leftTableId = leftTableType === 'transformation' ? joinConfig.leftTable - 10000 : joinConfig.leftTable
-                    const rightTableId = rightTableType === 'transformation' ? joinConfig.rightTable - 10000 : joinConfig.rightTable
+                    // Determine table types and original IDs using helper function
+                    const { type: leftTableType, id: leftTableId } = getTableTypeAndId(joinConfig.leftTable)
+                    const { type: rightTableType, id: rightTableId } = getTableTypeAndId(joinConfig.rightTable)
                     
                     const response = await fetch(getApiUrl(`/projects/${projectId}/joins/${joinId}`), {
                       method: 'PUT',
@@ -697,6 +695,11 @@ export default function TransformCanvas({
                   }))
                   
                   alert(`Qualitative analysis completed successfully! Processed ${result.total_records_processed} records in ${(result.execution_time_ms / 1000).toFixed(1)}s`)
+                  
+                  // Refresh qualitative data operations list so completed operation appears in dropdowns
+                  if (onQualitativeDataCreated) {
+                    await onQualitativeDataCreated()
+                  }
                 } else {
                   const error = await executeResponse.json()
                   
@@ -788,7 +791,7 @@ export default function TransformCanvas({
     }
     
     initializeCanvas()
-  }, [sheets, transformationSteps, qualitativeDataOperations, onUpdateTransformationStep, onExecuteStep, projectId, setEdges])
+  }, [sheets, transformationSteps, qualitativeDataOperations, onUpdateTransformationStep, onExecuteStep, projectId, setEdges, onQualitativeDataCreated])
 
   const onConnect = useCallback(
     (params: Connection) => {
@@ -1029,7 +1032,7 @@ export default function TransformCanvas({
     }
   }, [contextMenu])
 
-  // Available tables for join (sheets + completed transformations + completed joins)
+  // Available tables for join (sheets + completed transformations + completed joins + completed qualitative)
   const availableTables = useMemo(() => {
     const tables = [
       // Add sheets as available tables
@@ -1054,14 +1057,23 @@ export default function TransformCanvas({
         .map(join => ({
           id: join.id + 20000, // Offset to avoid conflicts with sheet and transformation IDs
           name: join.output_table_name || join.name,
-          columns: [], // Join columns would need to be fetched from backend if needed
-          type: 'transformation' as const // Treat joins as transformations for the UI
+          columns: join.output_columns || [], // Use join output columns
+          type: 'join' as const // Use correct join type
+        })),
+      // Add completed qualitative operations as available tables
+      ...qualitativeDataOperations
+        .filter(op => op.status === 'completed')
+        .map(op => ({
+          id: op.id + 30000, // Offset to avoid conflicts with other IDs
+          name: op.output_table_name || op.name,
+          columns: [], // Columns will be fetched dynamically from the actual database table
+          type: 'qualitative' as const
         }))
     ]
     return tables
-  }, [sheets, transformationSteps, joins])
+  }, [sheets, transformationSteps, joins, qualitativeDataOperations])
 
-  // Available tables for qualitative analysis (only sheets and transformations, not joins)
+  // Available tables for qualitative analysis (all table types)
   const qualitativeAvailableTables = useMemo(() => {
     const tables = [
       // Add sheets as available tables
@@ -1079,10 +1091,45 @@ export default function TransformCanvas({
           name: step.step_name,
           columns: step.output_columns || [],
           type: 'transformation' as const
+        })),
+      // Add completed joins as available tables
+      ...joins
+        .filter(join => join.status === 'completed')
+        .map(join => ({
+          id: join.id,
+          name: join.output_table_name || join.name,
+          columns: join.output_columns || [],
+          type: 'join' as const
+        })),
+      // Add completed qualitative operations as available tables
+      ...qualitativeDataOperations
+        .filter(op => op.status === 'completed')
+        .map(op => ({
+          id: op.id,
+          name: op.output_table_name || op.name,
+          columns: [], // Columns will be fetched dynamically from the actual database table
+          type: 'qualitative' as const
         }))
     ]
     return tables
-  }, [sheets, transformationSteps])
+  }, [sheets, transformationSteps, joins, qualitativeDataOperations])
+
+  // Helper function to determine table type and original ID from offset ID
+  const getTableTypeAndId = useCallback((offsetId: number) => {
+    if (offsetId >= 30000) {
+      // Qualitative operation
+      return { type: 'qualitative', id: offsetId - 30000 }
+    } else if (offsetId >= 20000) {
+      // Join operation
+      return { type: 'join', id: offsetId - 20000 }
+    } else if (offsetId >= 10000) {
+      // Transformation
+      return { type: 'transformation', id: offsetId - 10000 }
+    } else {
+      // Sheet
+      return { type: 'sheet', id: offsetId }
+    }
+  }, [])
 
   const handleCreateJoinSubmit = useCallback(async (joinConfig: {
     name: string
@@ -1101,13 +1148,9 @@ export default function TransformCanvas({
         throw new Error('Selected tables not found')
       }
       
-      // Determine if table is a sheet or transformation
-      const leftTableType = joinConfig.leftTable >= 10000 ? 'transformation' : 'sheet'
-      const rightTableType = joinConfig.rightTable >= 10000 ? 'transformation' : 'sheet'
-      
-      // Adjust IDs back to original values
-      const leftTableId = leftTableType === 'transformation' ? joinConfig.leftTable - 10000 : joinConfig.leftTable
-      const rightTableId = rightTableType === 'transformation' ? joinConfig.rightTable - 10000 : joinConfig.rightTable
+      // Determine table types and original IDs using helper function
+      const { type: leftTableType, id: leftTableId } = getTableTypeAndId(joinConfig.leftTable)
+      const { type: rightTableType, id: rightTableId } = getTableTypeAndId(joinConfig.rightTable)
       
       // Create join via backend API
       const response = await fetch(getApiUrl(`/projects/${projectId}/joins`), {
@@ -1193,13 +1236,9 @@ export default function TransformCanvas({
                 throw new Error('Selected tables not found')
               }
               
-              // Determine if table is a sheet or transformation
-              const leftTableType = joinConfig.leftTable >= 10000 ? 'transformation' : 'sheet'
-              const rightTableType = joinConfig.rightTable >= 10000 ? 'transformation' : 'sheet'
-              
-              // Adjust IDs back to original values
-              const leftTableId = leftTableType === 'transformation' ? joinConfig.leftTable - 10000 : joinConfig.leftTable
-              const rightTableId = rightTableType === 'transformation' ? joinConfig.rightTable - 10000 : joinConfig.rightTable
+              // Determine table types and original IDs using helper function
+              const { type: leftTableType, id: leftTableId } = getTableTypeAndId(joinConfig.leftTable)
+              const { type: rightTableType, id: rightTableId } = getTableTypeAndId(joinConfig.rightTable)
               
               const response = await fetch(getApiUrl(`/projects/${projectId}/joins/${joinId}`), {
                 method: 'PUT',
@@ -1368,15 +1407,17 @@ export default function TransformCanvas({
       }
       alert(`Failed to create join: ${errorMessage}`)
     }
-  }, [joinModalPosition, availableTables, projectId])
+  }, [joinModalPosition, availableTables, projectId, getTableTypeAndId])
 
   const handleCreateQualitativeDataSubmit = useCallback(async (operationConfig: {
     name: string
     source_table_id: number
-    source_table_type: 'sheet' | 'transformation'
+    source_table_type: 'sheet' | 'transformation' | 'join' | 'qualitative'
     qualitative_column: string
     analysis_type: 'sentiment' | 'summarization'
     aggregation_column?: string
+    summarize_sentiment_analysis?: boolean
+    sentiment_column?: string
     output_table_name?: string
   }) => {
     try {
@@ -1394,6 +1435,8 @@ export default function TransformCanvas({
           qualitative_column: operationConfig.qualitative_column,
           analysis_type: operationConfig.analysis_type,
           aggregation_column: operationConfig.aggregation_column,
+          summarize_sentiment_analysis: operationConfig.summarize_sentiment_analysis,
+          sentiment_column: operationConfig.sentiment_column,
           canvas_position: qualitativeModalPosition,
           output_table_name: operationConfig.output_table_name
         }),
@@ -1582,10 +1625,12 @@ export default function TransformCanvas({
   const handleUpdateQualitativeDataSubmit = useCallback(async (operationConfig: {
     name: string
     source_table_id: number
-    source_table_type: 'sheet' | 'transformation'
+    source_table_type: 'sheet' | 'transformation' | 'join' | 'qualitative'
     qualitative_column: string
     analysis_type: 'sentiment' | 'summarization'
     aggregation_column?: string
+    summarize_sentiment_analysis?: boolean
+    sentiment_column?: string
     output_table_name?: string
   }) => {
     if (!editingQualitativeOperation) return
@@ -1604,6 +1649,8 @@ export default function TransformCanvas({
           qualitative_column: operationConfig.qualitative_column,
           analysis_type: operationConfig.analysis_type,
           aggregation_column: operationConfig.aggregation_column,
+          summarize_sentiment_analysis: operationConfig.summarize_sentiment_analysis,
+          sentiment_column: operationConfig.sentiment_column,
           output_table_name: operationConfig.output_table_name
         }),
       })
@@ -1706,18 +1753,18 @@ export default function TransformCanvas({
       <div className="absolute top-4 left-4 bg-white rounded-lg shadow-lg border p-3 flex items-center gap-2">
         <button
           onClick={handleExecuteAll}
-          disabled={isExecutingAll || (transformationSteps.length === 0 && joins.length === 0)}
+          disabled={isExecutingAll || (transformationSteps.length === 0 && joins.length === 0 && qualitativeDataOperations.length === 0)}
           className={`flex items-center gap-2 px-3 py-2 rounded-lg font-medium transition-colors ${
-            isExecutingAll || (transformationSteps.length === 0 && joins.length === 0)
+            isExecutingAll || (transformationSteps.length === 0 && joins.length === 0 && qualitativeDataOperations.length === 0)
               ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
               : 'bg-blue-600 hover:bg-blue-700 text-white'
           }`}
         >
           {isExecutingAll ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
           {isExecutingAll ? 'Running All...' : 'Run All'}
-          {(transformationSteps.length > 0 || joins.length > 0) && !isExecutingAll && (
+          {(transformationSteps.length > 0 || joins.length > 0 || qualitativeDataOperations.length > 0) && !isExecutingAll && (
             <span className="text-xs bg-white/20 px-1.5 py-0.5 rounded">
-              {transformationSteps.length + joins.length}
+              {transformationSteps.length + joins.length + qualitativeDataOperations.length}
             </span>
           )}
         </button>

@@ -14,6 +14,8 @@ interface QualitativeDataNodeData {
     qualitative_column: string
     analysis_type: string // 'sentiment' or 'summarization'
     aggregation_column?: string
+    summarize_sentiment_analysis?: boolean
+    sentiment_column?: string
     status: 'pending' | 'running' | 'completed' | 'failed'
     error_message?: string
     output_table_name?: string
@@ -164,6 +166,9 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
                 <div><strong>Analysis Type:</strong> {getAnalysisTypeDisplayText(operation.analysis_type)}</div>
                 {operation.aggregation_column && operation.analysis_type === 'summarization' && (
                   <div><strong>Group By:</strong> {operation.aggregation_column}</div>
+                )}
+                {operation.analysis_type === 'summarization' && operation.summarize_sentiment_analysis && (
+                  <div><strong>Sentiment Stats:</strong> Enabled{operation.sentiment_column ? ` (using ${operation.sentiment_column})` : ''}</div>
                 )}
                 <div><strong>Source:</strong> {(() => {
                   const table = availableTables?.find(t => t.id === operation.source_table_id && t.type === operation.source_table_type)

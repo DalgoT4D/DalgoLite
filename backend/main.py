@@ -160,8 +160,9 @@ class AITransformationRequest(BaseModel):
     step_name: str
     user_prompt: str
     output_table_name: Optional[str] = None  # Custom output table name
-    upstream_step_ids: Optional[List[int]] = []
-    upstream_sheet_ids: Optional[List[int]] = []
+    upstream_step_ids: Optional[List[int]] = []  # Legacy support
+    upstream_sheet_ids: Optional[List[int]] = []  # Legacy support
+    upstream_tables: Optional[List[Dict[str, Any]]] = []  # New unified format: [{"id": 1, "type": "sheet"}]
     canvas_position: Optional[Dict[str, float]] = {"x": 0, "y": 0}
 
 class TransformationStepUpdateRequest(BaseModel):
@@ -177,6 +178,8 @@ class QualitativeDataCreateRequest(BaseModel):
     qualitative_column: str
     analysis_type: str  # 'sentiment' or 'summarization'
     aggregation_column: Optional[str] = None  # Optional column for group-by summarization
+    summarize_sentiment_analysis: Optional[bool] = None  # Whether to include sentiment stats
+    sentiment_column: Optional[str] = None  # Column containing sentiment analysis results
     canvas_position: Dict[str, int]
     output_table_name: Optional[str] = None
 
@@ -187,11 +190,141 @@ class QualitativeDataUpdateRequest(BaseModel):
     qualitative_column: Optional[str] = None
     analysis_type: Optional[str] = None
     aggregation_column: Optional[str] = None
+    summarize_sentiment_analysis: Optional[bool] = None
+    sentiment_column: Optional[str] = None
     output_table_name: Optional[str] = None
 
 class CanvasLayoutUpdateRequest(BaseModel):
     nodes: List[Dict[str, Any]]
     connections: List[Dict[str, Any]]
+
+def load_table_data(table_id, table_type, current_user, db):
+    """Load data from a single table of any type"""
+    try:
+        if table_type == 'sheet':
+            sheet_repo = SheetRepository(db)
+            sheet = sheet_repo.get_sheet_by_id(table_id, current_user.id)
+            if sheet:
+                return fetch_full_sheet_data(sheet)
+                
+        elif table_type == 'transformation':
+            ai_step = db.query(AITransformationStep).filter(
+                AITransformationStep.id == table_id,
+                AITransformationStep.status == 'completed'
+            ).first()
+            if ai_step:
+                table_name = getattr(ai_step, 'actual_table_name', None) or ai_step.output_table_name
+                if table_name:
+                    return pd.read_sql_table(table_name, engine)
+                    
+        elif table_type == 'join':
+            join_op = db.query(JoinOperation).filter(
+                JoinOperation.id == table_id,
+                JoinOperation.status == 'completed'
+            ).first()
+            if join_op:
+                table_name = getattr(join_op, 'actual_table_name', None) or join_op.output_table_name
+                if table_name:
+                    return pd.read_sql_table(table_name, engine)
+                    
+        elif table_type == 'qualitative':
+            qual_op = db.query(QualitativeDataOperation).filter(
+                QualitativeDataOperation.id == table_id,
+                QualitativeDataOperation.status == 'completed'
+            ).first()
+            if qual_op:
+                table_name = getattr(qual_op, 'actual_table_name', None) or qual_op.output_table_name
+                if table_name:
+                    return pd.read_sql_table(table_name, engine)
+                    
+    except Exception as e:
+        print(f"Could not load {table_type} table {table_id}: {e}")
+        
+    return None
+
+def get_table_columns(table_id, table_type, current_user, db):
+    """Get available columns from a table of any type by reading from the actual database table"""
+    print(f"DEBUG get_table_columns: table_id={table_id}, table_type={table_type}")
+    try:
+        if table_type == 'sheet':
+            sheet_repo = SheetRepository(db)
+            sheet = sheet_repo.get_sheet_by_id(table_id, current_user.id)
+            if sheet and sheet.columns:
+                return sheet.columns
+                
+        elif table_type in ['transformation', 'join', 'qualitative']:
+            # For database tables, get the actual table name and fetch columns from it
+            table_name = None
+            
+            if table_type == 'transformation':
+                ai_step = db.query(AITransformationStep).filter(
+                    AITransformationStep.id == table_id,
+                    AITransformationStep.status == 'completed'
+                ).first()
+                if ai_step:
+                    table_name = getattr(ai_step, 'actual_table_name', None) or ai_step.output_table_name
+                    
+            elif table_type == 'join':
+                join_op = db.query(JoinOperation).filter(
+                    JoinOperation.id == table_id,
+                    JoinOperation.status == 'completed'
+                ).first()
+                if join_op:
+                    table_name = getattr(join_op, 'actual_table_name', None) or join_op.output_table_name
+                    
+            elif table_type == 'qualitative':
+                print(f"DEBUG: Looking for qualitative operation with id={table_id}")
+                qual_op = db.query(QualitativeDataOperation).filter(
+                    QualitativeDataOperation.id == table_id,
+                    QualitativeDataOperation.status == 'completed'
+                ).first()
+                print(f"DEBUG: Found qualitative operation: {qual_op}")
+                if qual_op:
+                    table_name = getattr(qual_op, 'actual_table_name', None) or qual_op.output_table_name
+                    print(f"DEBUG: Qualitative table_name: {table_name}")
+            
+            # If we have a table name, fetch columns from the actual database table
+            if table_name:
+                with engine.connect() as conn:
+                    # Check if table exists
+                    result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name = :name"), 
+                                        {"name": table_name})
+                    if result.fetchone():
+                        # Get column names from the table
+                        result = conn.execute(text(f"PRAGMA table_info({table_name})"))
+                        columns = [row[1] for row in result.fetchall()]  # column name is at index 1
+                        return columns
+                
+    except Exception as e:
+        print(f"Could not get columns for {table_type} table {table_id}: {e}")
+        
+    return []
+
+def load_upstream_data(step, current_user, db):
+    """Load data from upstream tables using unified upstream_tables format or legacy format"""
+    sheet_data = {}
+    
+    # Try new unified format first
+    if hasattr(step, 'upstream_tables') and step.upstream_tables:
+        for table_ref in step.upstream_tables:
+            table_id = table_ref['id']
+            table_type = table_ref['type']
+            
+            df = load_table_data(table_id, table_type, current_user, db)
+            if df is not None and not df.empty:
+                sheet_data[f'{table_type}_{table_id}'] = df
+    
+    # Fallback to legacy format if no unified format or empty
+    elif hasattr(step, 'upstream_sheet_ids') and step.upstream_sheet_ids:
+        sheet_repo = SheetRepository(db)
+        for sheet_id in step.upstream_sheet_ids:
+            sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
+            if sheet:
+                df = fetch_full_sheet_data(sheet)
+                if df is not None and not df.empty:
+                    sheet_data[f'sheet_{sheet_id}'] = df
+    
+    return sheet_data
 
 def extract_spreadsheet_id(input_str: str) -> str:
     """
@@ -2094,34 +2227,14 @@ async def create_join(project_id: int, request: JoinCreateRequest, current_user:
         sheet_repo = SheetRepository(db)
         
         # Validate left table
-        if request.left_table_type == 'sheet':
-            left_table = sheet_repo.get_sheet_by_id(request.left_table_id, current_user.id)
-            if not left_table:
-                raise HTTPException(status_code=404, detail="Left table (sheet) not found")
-        elif request.left_table_type == 'transformation':
-            # Validate transformation step exists and is completed
-            left_step = db.query(AITransformationStep).filter(
-                AITransformationStep.id == request.left_table_id,
-                AITransformationStep.project_id == project_id,
-                AITransformationStep.status == 'completed'
-            ).first()
-            if not left_step:
-                raise HTTPException(status_code=404, detail="Left table (transformation step) not found or not completed")
+        left_df = load_table_data(request.left_table_id, request.left_table_type, current_user, db)
+        if left_df is None or left_df.empty:
+            raise HTTPException(status_code=404, detail=f"Left table ({request.left_table_type}) not found or has no data")
         
         # Validate right table  
-        if request.right_table_type == 'sheet':
-            right_table = sheet_repo.get_sheet_by_id(request.right_table_id, current_user.id)
-            if not right_table:
-                raise HTTPException(status_code=404, detail="Right table (sheet) not found")
-        elif request.right_table_type == 'transformation':
-            # Validate transformation step exists and is completed
-            right_step = db.query(AITransformationStep).filter(
-                AITransformationStep.id == request.right_table_id,
-                AITransformationStep.project_id == project_id,
-                AITransformationStep.status == 'completed'
-            ).first()
-            if not right_step:
-                raise HTTPException(status_code=404, detail="Right table (transformation step) not found or not completed")
+        right_df = load_table_data(request.right_table_id, request.right_table_type, current_user, db)
+        if right_df is None or right_df.empty:
+            raise HTTPException(status_code=404, detail=f"Right table ({request.right_table_type}) not found or has no data")
         
         # Create join operation
         join_repo = JoinRepository(db)
@@ -2257,99 +2370,15 @@ async def execute_join(project_id: int, join_id: int, current_user: User = Depen
             
             sheet_repo = SheetRepository(db)
             
-            # Get left table data
-            if join_op.left_table_type == 'sheet':
-                left_sheet = sheet_repo.get_sheet_by_id(join_op.left_table_id, current_user.id)
-                if not left_sheet:
-                    raise Exception("Left sheet not found")
-                left_df = fetch_full_sheet_data(left_sheet)
-                if left_df is None or left_df.empty:
-                    raise Exception("Could not fetch data from left sheet. Please check your Google Sheets authentication.")
-            elif join_op.left_table_type == 'transformation':
-                # Get transformation step to find its output table name
-                left_step = db.query(AITransformationStep).filter(
-                    AITransformationStep.id == join_op.left_table_id
-                ).first()
-
-                if not left_step:
-                    raise Exception("Left transformation step not found")
-
-                # Use the custom output_table_name if available
-                if left_step.output_table_name:
-                    left_table_name = left_step.output_table_name
-                else:
-                    # Fallback to default pattern
-                    left_table_name = f"transform_step_{join_op.left_table_id}"
-
-                with engine.connect() as conn:
-                    try:
-                        # First try exact table name
-                        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name = :name"),
-                                            {"name": left_table_name})
-                        exact_match = result.fetchone()
-
-                        if exact_match:
-                            left_df = pd.read_sql_table(left_table_name, conn)
-                        else:
-                            # Fallback to pattern matching for legacy tables
-                            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"),
-                                                {"pattern": f"%transform_step_{join_op.left_table_id}%"})
-                            table_names = [row[0] for row in result.fetchall()]
-                            if table_names:
-                                left_df = pd.read_sql_table(table_names[0], conn)
-                            else:
-                                raise Exception(f"Left transformation output table '{left_table_name}' not found. Please execute the transformation '{left_step.step_name}' first.")
-                    except Exception as e:
-                        if "not found" in str(e).lower() or "no such table" in str(e).lower():
-                            raise Exception(f"Left transformation output table not found. Please execute the transformation '{left_step.step_name}' first.")
-                        raise Exception(f"Error reading left transformation data: {str(e)}")
+            # Get left table data using unified helper
+            left_df = load_table_data(join_op.left_table_id, join_op.left_table_type, current_user, db)
+            if left_df is None or left_df.empty:
+                raise Exception(f"Could not load left table ({join_op.left_table_type}). Please ensure it exists and has data.")
             
-            # Get right table data
-            if join_op.right_table_type == 'sheet':
-                right_sheet = sheet_repo.get_sheet_by_id(join_op.right_table_id, current_user.id)
-                if not right_sheet:
-                    raise Exception("Right sheet not found")
-                right_df = fetch_full_sheet_data(right_sheet)
-                if right_df is None or right_df.empty:
-                    raise Exception("Could not fetch data from right sheet. Please check your Google Sheets authentication.")
-            elif join_op.right_table_type == 'transformation':
-                # Get transformation step to find its output table name
-                right_step = db.query(AITransformationStep).filter(
-                    AITransformationStep.id == join_op.right_table_id
-                ).first()
-
-                if not right_step:
-                    raise Exception("Right transformation step not found")
-
-                # Use the custom output_table_name if available
-                if right_step.output_table_name:
-                    right_table_name = right_step.output_table_name
-                else:
-                    # Fallback to default pattern
-                    right_table_name = f"transform_step_{join_op.right_table_id}"
-
-                with engine.connect() as conn:
-                    try:
-                        # First try exact table name
-                        result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name = :name"),
-                                            {"name": right_table_name})
-                        exact_match = result.fetchone()
-
-                        if exact_match:
-                            right_df = pd.read_sql_table(right_table_name, conn)
-                        else:
-                            # Fallback to pattern matching for legacy tables
-                            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"),
-                                                {"pattern": f"%transform_step_{join_op.right_table_id}%"})
-                            table_names = [row[0] for row in result.fetchall()]
-                            if table_names:
-                                right_df = pd.read_sql_table(table_names[0], conn)
-                            else:
-                                raise Exception(f"Right transformation output table '{right_table_name}' not found. Please execute the transformation '{right_step.step_name}' first.")
-                    except Exception as e:
-                        if "not found" in str(e).lower() or "no such table" in str(e).lower():
-                            raise Exception(f"Right transformation output table not found. Please execute the transformation '{right_step.step_name}' first.")
-                        raise Exception(f"Error reading right transformation data: {str(e)}")
+            # Get right table data using unified helper
+            right_df = load_table_data(join_op.right_table_id, join_op.right_table_type, current_user, db)
+            if right_df is None or right_df.empty:
+                raise Exception(f"Could not load right table ({join_op.right_table_type}). Please ensure it exists and has data.")
             
             if left_df is None or right_df is None:
                 raise Exception("Failed to load data for join")
@@ -2537,40 +2566,35 @@ async def create_qualitative_data_operation(
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        # Validate source table
-        sheet_repo = SheetRepository(db)
+        # Validate source table using unified helper
+        available_columns = get_table_columns(request.source_table_id, request.source_table_type, current_user, db)
         
-        if request.source_table_type == 'sheet':
-            source_table = sheet_repo.get_sheet_by_id(request.source_table_id, current_user.id)
-            if not source_table:
-                raise HTTPException(status_code=404, detail="Source table (sheet) not found")
-            
-            # Validate column exists
-            if not source_table.columns or request.qualitative_column not in source_table.columns:
-                available_cols = source_table.columns or []
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"Column '{request.qualitative_column}' not found. Available columns: {available_cols}"
-                )
-        elif request.source_table_type == 'transformation':
-            # Validate transformation step exists and is completed
-            source_step = db.query(AITransformationStep).filter(
-                AITransformationStep.id == request.source_table_id,
-                AITransformationStep.project_id == project_id,
-                AITransformationStep.status == 'completed'
-            ).first()
-            if not source_step:
-                raise HTTPException(status_code=404, detail="Source table (transformation step) not found or not completed")
-            
-            # Validate column exists in output
-            if not source_step.output_columns or request.qualitative_column not in source_step.output_columns:
-                available_cols = source_step.output_columns or []
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"Column '{request.qualitative_column}' not found. Available columns: {available_cols}"
-                )
-        else:
-            raise HTTPException(status_code=400, detail="Invalid source_table_type. Must be 'sheet' or 'transformation'")
+        if not available_columns:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Source table ({request.source_table_type}) not found or has no available columns"
+            )
+        
+        # Validate qualitative column exists
+        if request.qualitative_column not in available_columns:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Column '{request.qualitative_column}' not found. Available columns: {available_columns}"
+            )
+        
+        # Additional validation for aggregation column if provided
+        if request.aggregation_column and request.aggregation_column not in available_columns:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Aggregation column '{request.aggregation_column}' not found. Available columns: {available_columns}"
+            )
+        
+        # Additional validation for sentiment column if provided
+        if request.sentiment_column and request.sentiment_column not in available_columns:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Sentiment column '{request.sentiment_column}' not found. Available columns: {available_columns}"
+            )
         
         # Validate analysis type
         if request.analysis_type not in ['sentiment', 'summarization']:
@@ -2598,6 +2622,8 @@ async def create_qualitative_data_operation(
             qualitative_column=request.qualitative_column,
             analysis_type=request.analysis_type,
             aggregation_column=clean_aggregation_column,
+            summarize_sentiment_analysis=request.summarize_sentiment_analysis,
+            sentiment_column=request.sentiment_column,
             canvas_position=request.canvas_position,
             output_table_name=request.output_table_name
         )
@@ -2686,6 +2712,8 @@ async def update_qualitative_data_operation(
         qualitative_column = request.qualitative_column if request.qualitative_column is not None else operation.qualitative_column
         analysis_type = request.analysis_type if request.analysis_type is not None else operation.analysis_type
         aggregation_column = request.aggregation_column if request.aggregation_column is not None else getattr(operation, 'aggregation_column', None)
+        summarize_sentiment_analysis = request.summarize_sentiment_analysis if request.summarize_sentiment_analysis is not None else getattr(operation, 'summarize_sentiment_analysis', False)
+        sentiment_column = request.sentiment_column if request.sentiment_column is not None else getattr(operation, 'sentiment_column', None)
         output_table_name = request.output_table_name if request.output_table_name is not None else operation.output_table_name
         
         # Validate analysis type if provided
@@ -2701,6 +2729,8 @@ async def update_qualitative_data_operation(
             qualitative_column=qualitative_column,
             analysis_type=analysis_type,
             aggregation_column=aggregation_column,
+            summarize_sentiment_analysis=summarize_sentiment_analysis,
+            sentiment_column=sentiment_column,
             output_table_name=output_table_name
         )
         
@@ -2746,37 +2776,8 @@ async def execute_qualitative_data_operation(
         start_time = time.time()
         
         try:
-            # Get source data
-            source_df = None
-            sheet_repo = SheetRepository(db)
-            
-            if operation.source_table_type == 'sheet':
-                # Get data from sheet
-                source_sheet = sheet_repo.get_sheet_by_id(operation.source_table_id, current_user.id)
-                if not source_sheet:
-                    raise Exception("Source sheet not found")
-                
-                # Get spreadsheet data from warehouse (same as AI transformations)
-                source_df = fetch_full_sheet_data(source_sheet)
-                
-                if source_df.empty:
-                    raise Exception("No data found in source sheet")
-                    
-            elif operation.source_table_type == 'transformation':
-                # Get data from transformation result
-                source_step = db.query(AITransformationStep).filter(
-                    AITransformationStep.id == operation.source_table_id
-                ).first()
-                if not source_step or source_step.status != 'completed':
-                    raise Exception("Source transformation step not found or not completed")
-                
-                # Load data from warehouse table
-                if not source_step.output_table_name:
-                    raise Exception("Source transformation has no output table")
-                
-                source_df = pd.read_sql_table(source_step.output_table_name, engine)
-            else:
-                raise Exception(f"Invalid source table type: {operation.source_table_type}")
+            # Get source data using unified helper
+            source_df = load_table_data(operation.source_table_id, operation.source_table_type, current_user, db)
             
             if source_df is None or source_df.empty:
                 raise Exception("No data available for analysis")
@@ -2800,7 +2801,9 @@ async def execute_qualitative_data_operation(
                 df=source_df,
                 text_column=operation.qualitative_column,
                 analysis_type=operation.analysis_type,
-                aggregation_column=operation.aggregation_column
+                aggregation_column=operation.aggregation_column,
+                summarize_sentiment_analysis=getattr(operation, 'summarize_sentiment_analysis', False),
+                sentiment_column=getattr(operation, 'sentiment_column', None)
             )
             
             if not analysis_result.get('success'):
@@ -3744,50 +3747,8 @@ async def execute_all_transformations(project_id: int, current_user: User = Depe
                 step.error_message = None
                 db.commit()
                 
-                # Get upstream data (from sheets and previous transformations)
-                sheet_data = {}
-                
-                # Add original sheet data
-                if step.upstream_sheet_ids:
-                    sheet_repo = SheetRepository(db)
-                    for sheet_id in step.upstream_sheet_ids:
-                        sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
-                        if sheet and sheet.sample_data and sheet.columns:
-                            df_data = {}
-                            for i, col in enumerate(sheet.columns):
-                                column_data = []
-                                for row in sheet.sample_data:
-                                    if i < len(row):
-                                        column_data.append(row[i])
-                                    else:
-                                        column_data.append(None)
-                                df_data[col] = column_data
-                            sheet_data[f'sheet_{sheet_id}'] = pd.DataFrame(df_data)
-                
-                # Add previous transformation results
-                if step.upstream_step_ids:
-                    for upstream_step_id in step.upstream_step_ids:
-                        upstream_step = db.query(AITransformationStep).filter(
-                            AITransformationStep.id == upstream_step_id,
-                            AITransformationStep.status == 'completed'
-                        ).first()
-                        
-                        if upstream_step and upstream_step.code_explanation:
-                            # Extract table name
-                            table_name = None
-                            if "Output table:" in upstream_step.code_explanation:
-                                lines = upstream_step.code_explanation.split('\n')
-                                for line in lines:
-                                    if line.startswith("Output table:"):
-                                        table_name = line.split(":", 1)[1].strip()
-                                        break
-                            
-                            if table_name:
-                                try:
-                                    upstream_df = pd.read_sql_table(table_name, engine)
-                                    sheet_data[f'transform_{upstream_step_id}'] = upstream_df
-                                except Exception as e:
-                                    print(f"Could not load upstream table {table_name}: {e}")
+                # Get upstream data using unified helper function
+                sheet_data = load_upstream_data(step, current_user, db)
                 
                 # Set the main df for transformation
                 df = None
@@ -3913,59 +3874,45 @@ async def get_project_data_sources(project_id: int, current_user: User = Depends
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        data_sources = []
+        # Use the unified table discovery method
+        data_sources = project_repo.get_all_available_tables(current_user.id, project_id)
         
-        # Add original sheets as data sources
-        sheet_repo = SheetRepository(db)
-        for sheet_id in project.sheet_ids:
-            sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
-            if sheet:
-                data_sources.append({
-                    "id": f"sheet_{sheet_id}",
-                    "name": sheet.title,
-                    "type": "sheet",
-                    "source_type": "original",
-                    "columns": sheet.columns,
-                    "row_count": sheet.total_rows
-                })
-        
-        # Add transformed tables as data sources
-        transformation_steps = db.query(AITransformationStep).filter(
-            AITransformationStep.project_id == project_id,
-            AITransformationStep.status == 'completed'
-        ).all()
-        
-        for step in transformation_steps:
-            # Extract table name from code_explanation (temporary approach)
-            table_name = None
-            if step.code_explanation and "Output table:" in step.code_explanation:
-                lines = step.code_explanation.split('\n')
-                for line in lines:
-                    if line.startswith("Output table:"):
-                        table_name = line.split(":", 1)[1].strip()
-                        break
+        # Format for backward compatibility
+        formatted_sources = []
+        for source in data_sources:
+            formatted_source = {
+                "id": f"{source['type']}_{source['id']}",
+                "name": source['name'],
+                "type": source['type'],
+                "source_type": "original" if source['type'] == 'sheet' else "transformed",
+                "columns": source['columns'],
+                "status": source['status']
+            }
             
-            if table_name:
-                # Try to get table info from SQLite
+            # Add table_name for non-sheet sources
+            if 'table_name' in source:
+                formatted_source['table_name'] = source['table_name']
+                
+            # Try to get row count for database tables
+            if source['type'] != 'sheet' and 'table_name' in source:
                 try:
-                    import pandas as pd
-                    result = engine.execute(f"SELECT COUNT(*) as count FROM {table_name}")
-                    row_count = result.fetchone()[0]
-                    
-                    data_sources.append({
-                        "id": f"transform_{step.id}",
-                        "name": f"{step.step_name} (Transformed)",
-                        "type": "transformed_table",
-                        "source_type": "transformed",
-                        "table_name": table_name,
-                        "columns": step.output_columns or [],
-                        "row_count": row_count,
-                        "step_id": step.id
-                    })
+                    with engine.connect() as conn:
+                        result = conn.execute(text(f"SELECT COUNT(*) as count FROM \"{source['table_name']}\""))
+                        row_count = result.fetchone()[0]
+                        formatted_source['row_count'] = row_count
                 except Exception as e:
-                    print(f"Could not get info for table {table_name}: {e}")
+                    print(f"Could not get row count for table {source.get('table_name', 'unknown')}: {e}")
+                    formatted_source['row_count'] = 0
+            elif source['type'] == 'sheet':
+                # For sheets, we can add row count from the sheet data
+                sheet_repo = SheetRepository(db)
+                sheet = sheet_repo.get_sheet_by_id(source['id'], current_user.id)
+                if sheet:
+                    formatted_source['row_count'] = sheet.total_rows
+            
+            formatted_sources.append(formatted_source)
         
-        return {"data_sources": data_sources}
+        return {"data_sources": formatted_sources}
         
     except HTTPException:
         raise
@@ -4242,6 +4189,7 @@ async def create_ai_transformation_step(
             output_columns=ai_result['estimated_output_columns'],
             upstream_step_ids=request.upstream_step_ids or [],
             upstream_sheet_ids=request.upstream_sheet_ids or [],
+            upstream_tables=request.upstream_tables or [],
             canvas_position=request.canvas_position or {"x": 0, "y": 0},
             execution_order=0,  # Will be calculated based on dependencies
             status='draft',
@@ -4440,47 +4388,8 @@ async def execute_transformation_step(step_id: int, current_user: User = Depends
         db.commit()
         
         try:
-            # Get upstream data (from sheets) - use full data from warehouse, not just samples
-            sheet_data = {}
-            if step.upstream_sheet_ids:
-                sheet_repo = SheetRepository(db)
-                for sheet_id in step.upstream_sheet_ids:
-                    sheet = sheet_repo.get_sheet_by_id(sheet_id, current_user.id)
-                    if sheet:
-                        # Get full data from warehouse table for this sheet if it exists
-                        project = db.query(TransformationProject).filter(
-                            TransformationProject.id == step.project_id
-                        ).first()
-                        
-                        # Get full data from warehouse (much faster than Google Sheets API)
-                        df = None
-                        try:
-                            # Use warehouse data instead of Google Sheets API calls
-                            df = fetch_full_sheet_data(sheet)
-                            if df is not None and not df.empty:
-                                pass
-                            else:
-                                pass
-                        except Exception as e:
-                            pass
-                        
-                        # Fallback to sample data only if Google Sheets fetch fails
-                        if df is None or df.empty:
-                            if sheet.sample_data and sheet.columns:
-                                pass
-                            df_data = {}
-                            for i, col in enumerate(sheet.columns):
-                                column_data = []
-                                for row in sheet.sample_data:
-                                    if i < len(row):
-                                        column_data.append(row[i])
-                                    else:
-                                        column_data.append(None)
-                                df_data[col] = column_data
-                            df = pd.DataFrame(df_data)
-                        
-                        if df is not None:
-                            sheet_data[f'sheet_{sheet_id}'] = df
+            # Get upstream data using unified helper function
+            sheet_data = load_upstream_data(step, current_user, db)
             
             # If we have sheet data, use the first one as 'df' for the transformation
             df = None
@@ -5324,6 +5233,58 @@ async def get_ai_providers():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting AI providers: {str(e)}")
+
+@app.get("/projects/{project_id}/table-columns/{table_id}")
+async def get_table_columns_endpoint(
+    project_id: int,
+    table_id: int,
+    table_type: str,
+    db: Session = Depends(get_db)
+):
+    """Get columns for a specific table"""
+    print(f"DEBUG: get_table_columns_endpoint called with project_id={project_id}, table_id={table_id}, table_type={table_type}")
+    try:
+        # Check auth
+        if 'default' not in user_credentials:
+            print("DEBUG: No default user in credentials")
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        print(f"DEBUG: user_credentials = {user_credentials}")
+        print(f"DEBUG: user_credentials['default'] = {user_credentials['default']}")
+        
+        # Create a user object with the authenticated user id
+        user_data = user_credentials['default']
+        user_id = user_data.get('user_id') or user_data.get('id') or 1
+        current_user = type('User', (), {'id': user_id})()
+        print(f"DEBUG: Created user with id: {current_user.id}")
+        
+        # Get columns using the unified helper function
+        print(f"DEBUG: Fetching columns for table_id={table_id}, table_type={table_type}")
+        columns = get_table_columns(table_id, table_type, current_user, db)
+        print(f"DEBUG: Found columns: {columns}")
+        
+        if not columns:
+            print(f"DEBUG: No columns found for table_id={table_id}, table_type={table_type}")
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Table not found or has no columns (type: {table_type}, id: {table_id})"
+            )
+        
+        return {"columns": columns}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"DEBUG: Exception in get_table_columns_endpoint: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/test-endpoint")
+async def test_endpoint():
+    """Test endpoint to verify routing works"""
+    print("DEBUG: Test endpoint called!")
+    return {"message": "Test endpoint works"}
 
 if __name__ == "__main__":
     import uvicorn

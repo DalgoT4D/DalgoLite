@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import { X, Brain, AlertCircle, Info } from 'lucide-react'
+import { getApiUrl } from '@/lib/config'
 
 interface QualitativeDataModalProps {
   isOpen: boolean
@@ -9,10 +10,12 @@ interface QualitativeDataModalProps {
   onCreateOperation: (operationConfig: {
     name: string
     source_table_id: number
-    source_table_type: 'sheet' | 'transformation'
+    source_table_type: 'sheet' | 'transformation' | 'join' | 'qualitative'
     qualitative_column: string
     analysis_type: 'sentiment' | 'summarization'
     aggregation_column?: string
+    summarize_sentiment_analysis?: boolean
+    sentiment_column?: string
     output_table_name?: string
   }) => Promise<void>
   position: { x: number; y: number }
@@ -20,7 +23,7 @@ interface QualitativeDataModalProps {
     id: number
     name: string
     columns: string[]
-    type: 'sheet' | 'transformation'
+    type: 'sheet' | 'transformation' | 'join' | 'qualitative'
   }>
   initialOperation?: {
     id: number
@@ -30,6 +33,8 @@ interface QualitativeDataModalProps {
     qualitative_column: string
     analysis_type: string
     aggregation_column?: string
+    summarize_sentiment_analysis?: boolean
+    sentiment_column?: string
     output_table_name?: string
   }
 }
@@ -44,12 +49,15 @@ export default function QualitativeDataModal({
 }: QualitativeDataModalProps) {
   const [operationName, setOperationName] = useState(initialOperation?.name || '')
   const [sourceTableId, setSourceTableId] = useState<number | null>(initialOperation?.source_table_id || null)
-  const [sourceTableType, setSourceTableType] = useState<'sheet' | 'transformation' | ''>('')
+  const [sourceTableType, setSourceTableType] = useState<'sheet' | 'transformation' | 'join' | 'qualitative' | ''>('')
   const [qualitativeColumn, setQualitativeColumn] = useState(initialOperation?.qualitative_column || '')
   const [analysisType, setAnalysisType] = useState<'sentiment' | 'summarization' | ''>(
     (initialOperation?.analysis_type as 'sentiment' | 'summarization') || ''
   )
+  const [availableColumns, setAvailableColumns] = useState<string[]>([])
   const [aggregationColumn, setAggregationColumn] = useState(initialOperation?.aggregation_column || '')
+  const [summarizeSentimentAnalysis, setSummarizeSentimentAnalysis] = useState(initialOperation?.summarize_sentiment_analysis || false)
+  const [sentimentColumn, setSentimentColumn] = useState(initialOperation?.sentiment_column || '')
   const [outputTableName, setOutputTableName] = useState(initialOperation?.output_table_name || '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -59,22 +67,25 @@ export default function QualitativeDataModal({
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
   const [modalPosition, setModalPosition] = useState(position)
 
-  // Get available columns for the selected table
-  const selectedTable = availableTables.find(table => 
-    table.id === sourceTableId && table.type === sourceTableType
-  )
-  const availableColumns = selectedTable?.columns || []
+  // Get available columns for the selected table (now using dynamic state)
 
   // Initialize form if editing
   useEffect(() => {
     if (initialOperation) {
       setOperationName(initialOperation.name)
       setSourceTableId(initialOperation.source_table_id)
-      setSourceTableType(initialOperation.source_table_type as 'sheet' | 'transformation')
+      setSourceTableType(initialOperation.source_table_type as 'sheet' | 'transformation' | 'join' | 'qualitative')
       setQualitativeColumn(initialOperation.qualitative_column)
       setAnalysisType(initialOperation.analysis_type as 'sentiment' | 'summarization')
       setAggregationColumn(initialOperation.aggregation_column || '')
+      setSummarizeSentimentAnalysis(initialOperation.summarize_sentiment_analysis || false)
+      setSentimentColumn(initialOperation.sentiment_column || '')
       setOutputTableName(initialOperation.output_table_name || '')
+      
+      // Fetch columns for the initial operation's source table
+      if (initialOperation.source_table_id && initialOperation.source_table_type) {
+        fetchTableColumns(initialOperation.source_table_id, initialOperation.source_table_type)
+      }
     }
   }, [initialOperation])
 
@@ -122,10 +133,51 @@ export default function QualitativeDataModal({
     }
   }, [isDragging, dragOffset])
 
+  const fetchTableColumns = async (tableId: number, tableType: string) => {
+    try {
+      // For sheets, use the existing columns from availableTables
+      if (tableType === 'sheet') {
+        const table = availableTables.find(t => t.id === tableId && t.type === 'sheet')
+        if (table) {
+          setAvailableColumns(table.columns)
+          return
+        }
+      }
+      
+      // For other table types, first try existing columns from availableTables
+      const table = availableTables.find(t => t.id === tableId && t.type === tableType)
+      if (table && table.columns.length > 0) {
+        setAvailableColumns(table.columns)
+        return
+      }
+      
+      // If no cached columns, fetch from API
+      const projectId = window.location.pathname.split('/')[2] // Extract project ID from URL
+      const response = await fetch(getApiUrl(`/projects/${projectId}/table-columns/${tableId}?table_type=${tableType}`), {
+        credentials: 'include'
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        setAvailableColumns(data.columns || [])
+      } else {
+        console.error('Failed to fetch table columns:', response.statusText)
+        setAvailableColumns([])
+      }
+    } catch (error) {
+      console.error('Error fetching table columns:', error)
+      setAvailableColumns([])
+    }
+  }
+
   const handleSourceTableChange = (tableId: string) => {
     const [type, id] = tableId.split(':')
-    setSourceTableId(parseInt(id))
-    setSourceTableType(type as 'sheet' | 'transformation')
+    const parsedId = parseInt(id)
+    setSourceTableId(parsedId)
+    setSourceTableType(type as 'sheet' | 'transformation' | 'join' | 'qualitative')
+    
+    // Fetch columns for the selected table
+    fetchTableColumns(parsedId, type)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -153,6 +205,12 @@ export default function QualitativeDataModal({
       return
     }
 
+    // Validate sentiment analysis options
+    if (analysisType === 'summarization' && summarizeSentimentAnalysis && !sentimentColumn) {
+      setError('Please select a sentiment column when sentiment analysis is enabled')
+      return
+    }
+
     setLoading(true)
     try {
       const operationConfig = {
@@ -162,6 +220,8 @@ export default function QualitativeDataModal({
         qualitative_column: qualitativeColumn,
         analysis_type: analysisType,
         aggregation_column: aggregationColumn.trim() || undefined,
+        summarize_sentiment_analysis: summarizeSentimentAnalysis,
+        sentiment_column: sentimentColumn.trim() || undefined,
         output_table_name: outputTableName.trim() || undefined
       }
       console.log('DEBUG: Creating qualitative operation with config:', operationConfig)
@@ -174,6 +234,8 @@ export default function QualitativeDataModal({
       setQualitativeColumn('')
       setAnalysisType('')
       setAggregationColumn('')
+      setSummarizeSentimentAnalysis(false)
+      setSentimentColumn('')
       setOutputTableName('')
       onClose()
     } catch (err: any) {
@@ -271,10 +333,10 @@ export default function QualitativeDataModal({
               onChange={(e) => setQualitativeColumn(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               required
-              disabled={!selectedTable}
+              disabled={!sourceTableId}
             >
               <option value="">
-                {selectedTable ? 'Select column with text data...' : 'First select a source table'}
+                {sourceTableId ? 'Select column with text data...' : 'First select a source table'}
               </option>
               {availableColumns.map(column => (
                 <option key={column} value={column}>
@@ -282,7 +344,7 @@ export default function QualitativeDataModal({
                 </option>
               ))}
             </select>
-            {selectedTable && availableColumns.length === 0 && (
+            {sourceTableId && availableColumns.length === 0 && (
               <p className="text-sm text-gray-500 mt-1">
                 No columns available in selected table
               </p>
@@ -329,10 +391,10 @@ export default function QualitativeDataModal({
                 value={aggregationColumn}
                 onChange={(e) => setAggregationColumn(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={!selectedTable}
+                disabled={!sourceTableId}
               >
                 <option value="">
-                  {selectedTable ? 'No grouping - analyze entire dataset...' : 'First select a source table'}
+                  {sourceTableId ? 'No grouping - analyze entire dataset...' : 'First select a source table'}
                 </option>
                 {availableColumns.map(column => (
                   <option key={column} value={column}>
@@ -344,6 +406,59 @@ export default function QualitativeDataModal({
                 <p className="text-sm text-blue-600 mt-1">
                   ✓ Will create separate summaries for each unique value in "{aggregationColumn}"
                 </p>
+              )}
+            </div>
+          )}
+
+          {/* Sentiment Analysis Options - Only show for summarization */}
+          {analysisType === 'summarization' && (
+            <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+              <div className="flex items-center gap-3 mb-3">
+                <input
+                  type="checkbox"
+                  id="summarizeSentimentAnalysis"
+                  checked={summarizeSentimentAnalysis}
+                  onChange={(e) => setSummarizeSentimentAnalysis(e.target.checked)}
+                  className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+                <label htmlFor="summarizeSentimentAnalysis" className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                  Summarize sentiment analysis
+                  <div className="group relative">
+                    <Info size={14} className="text-gray-400 cursor-help" />
+                    <div className="absolute left-0 bottom-6 hidden group-hover:block bg-gray-800 text-white text-xs rounded-lg px-3 py-2 w-64 z-10">
+                      <div className="mb-1 font-medium">Include Sentiment Statistics:</div>
+                      <div>• Calculate positive/negative review counts and percentages</div>
+                      <div>• Add these stats to your summary alongside the text analysis</div>
+                      <div className="absolute top-full left-4 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-800"></div>
+                    </div>
+                  </div>
+                </label>
+              </div>
+              
+              {summarizeSentimentAnalysis && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Sentiment Column *
+                  </label>
+                  <select
+                    value={sentimentColumn}
+                    onChange={(e) => setSentimentColumn(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    disabled={!sourceTableId}
+                  >
+                    <option value="">
+                      {sourceTableId ? 'Select sentiment analysis column...' : 'First select a source table'}
+                    </option>
+                    {availableColumns.map(column => (
+                      <option key={column} value={column}>
+                        {column}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Select the column containing sentiment analysis results (positive/negative)
+                  </p>
+                </div>
               )}
             </div>
           )}
@@ -368,10 +483,23 @@ export default function QualitativeDataModal({
                       <li><code>bullet_highlights</code> - Key insights</li>
                       <li><code>suggested_actions</code> - Recommended next steps</li>
                       <li><code>method_note</code> - Analysis limitations</li>
+                      {summarizeSentimentAnalysis && (
+                        <>
+                          <li><code>total_positive_reviews</code> - Count of positive sentiment</li>
+                          <li><code>total_negative_reviews</code> - Count of negative sentiment</li>
+                          <li><code>percent_positive_reviews</code> - Percentage positive</li>
+                          <li><code>percent_negative_reviews</code> - Percentage negative</li>
+                        </>
+                      )}
                     </ul>
                     {aggregationColumn && (
                       <div className="mt-2 p-2 bg-blue-100 rounded border">
                         <strong>Group-by Analysis:</strong> Each unique value in "{aggregationColumn}" will get its own summary row.
+                      </div>
+                    )}
+                    {summarizeSentimentAnalysis && (
+                      <div className="mt-2 p-2 bg-green-100 rounded border">
+                        <strong>Sentiment Statistics:</strong> Sentiment counts and percentages will be calculated{aggregationColumn ? ` per "${aggregationColumn}" group` : ' for the entire dataset'}.
                       </div>
                     )}
                   </>

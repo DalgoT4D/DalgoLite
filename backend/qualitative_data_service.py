@@ -143,7 +143,9 @@ class QualitativeDataService:
         df: pd.DataFrame, 
         text_column: str, 
         analysis_type: str,
-        aggregation_column: Optional[str] = None
+        aggregation_column: Optional[str] = None,
+        summarize_sentiment_analysis: bool = False,
+        sentiment_column: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Analyze qualitative data using OpenAI
@@ -181,7 +183,7 @@ class QualitativeDataService:
             if analysis_type == "sentiment":
                 return await self._perform_sentiment_analysis(valid_df, texts)
             elif analysis_type == "summarization":
-                return await self._perform_summarization_analysis(valid_df, texts, aggregation_column, text_column)
+                return await self._perform_summarization_analysis(valid_df, texts, aggregation_column, text_column, summarize_sentiment_analysis, sentiment_column)
             else:
                 raise ValueError(f"Unknown analysis type: {analysis_type}")
                 
@@ -245,7 +247,43 @@ class QualitativeDataService:
             "batch_count": len(chunks)
         }
 
-    async def _perform_summarization_analysis(self, df: pd.DataFrame, texts: List[str], aggregation_column: Optional[str] = None, text_column: str = None) -> Dict[str, Any]:
+    def _calculate_sentiment_stats(self, df: pd.DataFrame, sentiment_column: str, group_mask=None) -> Dict[str, Any]:
+        """Calculate sentiment statistics for a dataframe or subset"""
+        if group_mask is not None:
+            subset_df = df[group_mask]
+        else:
+            subset_df = df
+            
+        if sentiment_column not in subset_df.columns:
+            return {
+                "total_positive_reviews": 0,
+                "total_negative_reviews": 0,
+                "percent_positive_reviews": 0.0,
+                "percent_negative_reviews": 0.0
+            }
+        
+        # Count sentiment values (handle case variations)
+        sentiment_counts = subset_df[sentiment_column].str.lower().value_counts()
+        
+        total_positive = sentiment_counts.get('positive', 0)
+        total_negative = sentiment_counts.get('negative', 0)
+        total_reviews = len(subset_df)
+        
+        if total_reviews == 0:
+            percent_positive = 0.0
+            percent_negative = 0.0
+        else:
+            percent_positive = round((total_positive / total_reviews) * 100, 1)
+            percent_negative = round((total_negative / total_reviews) * 100, 1)
+        
+        return {
+            "total_positive_reviews": total_positive,
+            "total_negative_reviews": total_negative,
+            "percent_positive_reviews": percent_positive,
+            "percent_negative_reviews": percent_negative
+        }
+
+    async def _perform_summarization_analysis(self, df: pd.DataFrame, texts: List[str], aggregation_column: Optional[str] = None, text_column: str = None, summarize_sentiment_analysis: bool = False, sentiment_column: Optional[str] = None) -> Dict[str, Any]:
         """Perform summarization analysis on texts"""
         
         system_qa = (
@@ -311,13 +349,20 @@ class QualitativeDataService:
                 total_batches += 1
                 
                 # Create summary row for this group
-                summary_rows.append({
+                summary_row = {
                     aggregation_column: group_value,
                     "overall_summary": group_obj.get("overall_summary", ""),
                     "bullet_highlights": "; ".join(group_obj.get("bullet_highlights", [])),
                     "suggested_actions": "; ".join(group_obj.get("suggested_actions", [])),
                     "method_note": group_obj.get("method_note", "")
-                })
+                }
+                
+                # Add sentiment statistics if enabled
+                if summarize_sentiment_analysis and sentiment_column:
+                    sentiment_stats = self._calculate_sentiment_stats(df, sentiment_column, group_mask)
+                    summary_row.update(sentiment_stats)
+                
+                summary_rows.append(summary_row)
             
             # Create summary dataframe with aggregation column + 4 summary columns
             summary_df = pd.DataFrame(summary_rows)
@@ -345,13 +390,21 @@ class QualitativeDataService:
             suggested_actions = overall_obj.get("suggested_actions", [])
             method_note = overall_obj.get("method_note", "")
 
-            # Create summary dataframe with the 4 columns as specified
-            summary_df = pd.DataFrame({
+            # Create summary dataframe with the 4 base columns
+            summary_data = {
                 "overall_summary": [overall_summary_text],
                 "bullet_highlights": ["; ".join(bullet_highlights)],
                 "suggested_actions": ["; ".join(suggested_actions)],
                 "method_note": [method_note]
-            })
+            }
+            
+            # Add sentiment statistics if enabled
+            if summarize_sentiment_analysis and sentiment_column:
+                sentiment_stats = self._calculate_sentiment_stats(df, sentiment_column)
+                for key, value in sentiment_stats.items():
+                    summary_data[key] = [value]
+            
+            summary_df = pd.DataFrame(summary_data)
 
             return {
                 "success": True,
