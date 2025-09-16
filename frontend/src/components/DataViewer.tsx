@@ -164,7 +164,7 @@ export default function DataViewer({
       case 'sheet':
         return 'Original Sheet'
       case 'transformation':
-        return 'AI Transformation'
+        return 'Transformation'
       case 'project':
         return 'Project Data'
       case 'join':

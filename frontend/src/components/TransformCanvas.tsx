@@ -105,6 +105,7 @@ interface TransformCanvasProps {
   onExecuteStep: (stepId: number) => Promise<void>
   onExecuteAll?: () => Promise<void>
   onDeleteTransformationStep?: (stepId: number) => Promise<void>
+  onTransformationCreated?: () => Promise<void>
   onJoinCreated?: () => Promise<void>
   onQualitativeDataCreated?: () => Promise<void>
 }
@@ -120,6 +121,7 @@ export default function TransformCanvas({
   onExecuteStep,
   onExecuteAll,
   onDeleteTransformationStep,
+  onTransformationCreated,
   onJoinCreated,
   onQualitativeDataCreated,
 }: TransformCanvasProps) {
@@ -147,6 +149,7 @@ export default function TransformCanvas({
   const [newOutputTableName, setNewOutputTableName] = useState('')
   const [selectedUpstreamNodes, setSelectedUpstreamNodes] = useState<string[]>([])
   const [isExecutingAll, setIsExecutingAll] = useState(false)
+  const [isCreatingTransformation, setIsCreatingTransformation] = useState(false)
   const [isCreatingStep, setIsCreatingStep] = useState(false)
   
   // Context menu state
@@ -841,6 +844,11 @@ export default function TransformCanvas({
         canvas_position: createModalPosition
       })
 
+      // Refresh transformation steps list so newly created step appears in dropdowns
+      if (onTransformationCreated) {
+        await onTransformationCreated()
+      }
+
       // Reset modal
       setShowCreateModal(false)
       setNewStepName('')
@@ -895,6 +903,11 @@ export default function TransformCanvas({
     if (window.confirm('Are you sure you want to delete this transformation step? This action cannot be undone.')) {
       try {
         await onDeleteTransformationStep(stepId)
+        
+        // Refresh transformation steps list so deleted step is removed from dropdowns
+        if (onTransformationCreated) {
+          await onTransformationCreated()
+        }
       } catch (error) {
         console.error('Failed to delete transformation step:', error)
         alert('Failed to delete transformation step. Please try again.')
@@ -1476,7 +1489,12 @@ export default function TransformCanvas({
             setDataViewerOpen(true)
           },
           onEdit: (operationId: number) => {
-            console.log('Edit qualitative operation:', operationId)
+            // Find the operation to edit
+            const operationToEdit = qualitativeDataOperations.find(op => op.id === operationId)
+            if (operationToEdit) {
+              setEditingQualitativeOperation(operationToEdit)
+              setShowQualitativeModal(true)
+            }
           },
           onDelete: async (operationId: number) => {
             if (window.confirm('Are you sure you want to delete this qualitative analysis? This action cannot be undone.')) {
@@ -1542,6 +1560,11 @@ export default function TransformCanvas({
                   }
                   return node
                 }))
+                
+                // Refresh qualitative data operations list so completed operation appears in dropdowns
+                if (onQualitativeDataCreated) {
+                  await onQualitativeDataCreated()
+                }
                 
                 alert(`Qualitative analysis completed successfully! Processed ${result.total_records_processed} records in ${(result.execution_time_ms / 1000).toFixed(1)}s`)
               } else {
@@ -1784,7 +1807,7 @@ export default function TransformCanvas({
               >
                 <Zap size={16} className="text-green-600" />
                 <div>
-                  <div className="font-medium text-gray-900">AI Transformation</div>
+                  <div className="font-medium text-gray-900">Transformation</div>
                   <div className="text-xs text-gray-500">Transform data with natural language</div>
                 </div>
               </button>
@@ -1888,7 +1911,7 @@ export default function TransformCanvas({
             >
               <div className="flex items-center gap-2">
                 <Zap className="text-green-600" size={20} />
-                <h3 className="text-lg font-semibold text-gray-900">Create AI Transformation</h3>
+                <h3 className="text-lg font-semibold text-gray-900">Create Transformation</h3>
               </div>
               <button
                 onClick={() => {

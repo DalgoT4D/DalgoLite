@@ -1400,13 +1400,126 @@ class UnifiedChartCreateRequest(BaseModel):
     y_axis_column: Optional[str] = None
     chart_config: Optional[dict] = {}
     # Source identification
-    source_type: str  # 'sheet', 'transformation', 'join'
+    source_type: str  # 'sheet', 'transformation', 'join', 'qualitative'
     source_id: int    # ID of the source (sheet_id, step_id, join_id)
     project_id: Optional[int] = None  # Required for transformation/join sources
 
+
+def fetch_source_values_for_chart(source_type: str, source_id: int, current_user: User, db: Session):
+    """Load tabular data for the provided chart source"""
+    if source_type == "sheet":
+        sheet_repo = SheetRepository(db)
+        sheet = sheet_repo.get_sheet_by_id(source_id, current_user.id)
+        if not sheet:
+            raise HTTPException(status_code=404, detail="Sheet not found")
+
+        creds = get_refreshed_credentials()
+        if creds is None:
+            raise HTTPException(status_code=500, detail="Could not get valid credentials")
+
+        try:
+            service = build('sheets', 'v4', credentials=creds)
+            try:
+                result = service.spreadsheets().values().get(
+                    spreadsheetId=sheet.spreadsheet_id,
+                    range=f"'{sheet.sheet_name}'!A:ZZ"
+                ).execute()
+            except Exception as range_error:
+                try:
+                    result = service.spreadsheets().values().get(
+                        spreadsheetId=sheet.spreadsheet_id,
+                        range="A:ZZ"
+                    ).execute()
+                except Exception as fallback_error:
+                    raise Exception(f"Range parsing failed: {str(range_error)}. Fallback also failed: {str(fallback_error)}")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch sheet data: {str(e)}")
+
+        return result.get('values', [])
+
+    if source_type == "join":
+        join_repo = JoinRepository(db)
+        join_op = join_repo.get_join_by_id(source_id)
+        if not join_op or join_op.status != 'completed':
+            raise HTTPException(status_code=404, detail="Join operation not completed")
+
+        with engine.connect() as conn:
+            result = conn.execute(text(f"SELECT * FROM {join_op.output_table_name}"))
+            rows = result.fetchall()
+            columns = list(result.keys())
+        return [columns] + [list(row) for row in rows]
+
+    if source_type == "transformation":
+        step = db.query(AITransformationStep).filter(
+            AITransformationStep.id == source_id
+        ).first()
+        if not step or step.status != 'completed':
+            raise HTTPException(status_code=404, detail="Transformation step not completed")
+
+        table_name = f"transform_step_{source_id}"
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE :pattern"),
+                                  {"pattern": f"%{table_name}%"})
+            table_names = [row[0] for row in result.fetchall()]
+            if not table_names:
+                raise HTTPException(status_code=404, detail="Transformation output table not found")
+
+            result = conn.execute(text(f"SELECT * FROM {table_names[0]}"))
+            rows = result.fetchall()
+            columns = list(result.keys())
+
+        return [columns] + [list(row) for row in rows]
+
+    if source_type == "qualitative":
+        qual_op = db.query(QualitativeDataOperation).filter(
+            QualitativeDataOperation.id == source_id
+        ).first()
+        if not qual_op or qual_op.status != 'completed':
+            raise HTTPException(status_code=404, detail="Qualitative operation not completed")
+
+        with engine.connect() as conn:
+            result = conn.execute(text(f"SELECT * FROM {qual_op.output_table_name}"))
+            rows = result.fetchall()
+            columns = list(result.keys())
+
+        return [columns] + [list(row) for row in rows]
+
+    raise HTTPException(status_code=400, detail="Chart has no valid data source")
+
+
+def find_duplicate_values(records: List[Dict[str, Any]], unique_column: str) -> List[str]:
+    """Identify duplicate entries in the provided unique column"""
+    def normalize(value: Any):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value.strip().lower()
+        return str(value)
+
+    seen = {}
+    duplicates = set()
+
+    for record in records:
+        original_value = record.get(unique_column)
+        key = normalize(original_value)
+        if key in seen:
+            duplicates.add(key)
+        else:
+            seen[key] = original_value
+
+    duplicate_values = []
+    for key in duplicates:
+        original_value = seen.get(key)
+        if original_value is None or (isinstance(original_value, str) and original_value.strip() == ''):
+            duplicate_values.append('[blank]')
+        else:
+            duplicate_values.append(str(original_value))
+
+    return duplicate_values
+
 @app.post("/charts/unified")
 async def create_unified_chart(chart_request: UnifiedChartCreateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Create a chart from any source type (sheet, AI transformation, join)"""
+    """Create a chart from any source type (sheet, AI transformation, join, qualitative)"""
     try:
         
         chart_repo = ChartRepository(db)
@@ -1436,15 +1549,106 @@ async def create_unified_chart(chart_request: UnifiedChartCreateRequest, current
             join_op = join_repo.get_join_by_id(chart_request.source_id)
             if not join_op:
                 raise HTTPException(status_code=404, detail="Join operation not found")
+                
+        elif chart_request.source_type == "qualitative":
+            # Validate qualitative operation exists
+            qual_op = db.query(QualitativeDataOperation).filter(
+                QualitativeDataOperation.id == chart_request.source_id
+            ).first()
+            if not qual_op:
+                raise HTTPException(status_code=404, detail="Qualitative operation not found")
         else:
-            raise HTTPException(status_code=400, detail="Invalid source_type. Must be 'sheet', 'transformation', or 'join'")
-        
+            raise HTTPException(status_code=400, detail="Invalid source_type. Must be 'sheet', 'transformation', 'join', or 'qualitative'")
+
+        chart_type_lower = chart_request.chart_type.lower()
+
         # Store source info in chart config for data retrieval
         chart_config = chart_request.chart_config or {}
-        chart_config.update({
-            "source_type": chart_request.source_type,
-            "source_id": chart_request.source_id
-        })
+
+        if chart_type_lower == 'qualitative_cards':
+            unique_column = chart_config.get('unique_column')
+            qualitative_column = chart_config.get('qualitative_column')
+            quantitative_columns = chart_config.get('quantitative_columns') or []
+            quantitative_labels_input = chart_config.get('quantitative_labels') or []
+            value_formatting = chart_config.get('value_formatting') or {}
+
+            if not unique_column or not isinstance(unique_column, str):
+                raise HTTPException(status_code=400, detail="Qualitative Cards require a unique identifier column")
+            if not qualitative_column or not isinstance(qualitative_column, str):
+                raise HTTPException(status_code=400, detail="Qualitative Cards require a qualitative text column")
+
+            quantitative_columns = [col for col in quantitative_columns if isinstance(col, str) and col.strip()]
+            if len(quantitative_columns) > 2:
+                quantitative_columns = quantitative_columns[:2]
+
+            quantitative_labels = []
+            for idx, col in enumerate(quantitative_columns):
+                label = None
+                if idx < len(quantitative_labels_input):
+                    label = quantitative_labels_input[idx]
+                if isinstance(label, str) and label.strip():
+                    quantitative_labels.append(label.strip())
+                else:
+                    quantitative_labels.append(col)
+
+            # Ensure formatting is a dict limited to selected columns
+            sanitized_formatting = {}
+            if isinstance(value_formatting, dict):
+                for col in quantitative_columns:
+                    fmt = value_formatting.get(col)
+                    if isinstance(fmt, str) and fmt.strip():
+                        sanitized_formatting[col] = fmt.strip()
+
+            values = fetch_source_values_for_chart(chart_request.source_type, chart_request.source_id, current_user, db)
+            if not values or len(values) < 2:
+                raise HTTPException(status_code=400, detail="No data available to validate Qualitative Cards")
+
+            headers = values[0]
+            data_rows = values[1:]
+
+            if unique_column not in headers:
+                raise HTTPException(status_code=400, detail=f"Column '{unique_column}' not found in data source")
+            if qualitative_column not in headers:
+                raise HTTPException(status_code=400, detail=f"Column '{qualitative_column}' not found in data source")
+            for col in quantitative_columns:
+                if col not in headers:
+                    raise HTTPException(status_code=400, detail=f"Quantitative column '{col}' not found in data source")
+
+            records = []
+            for row in data_rows:
+                if not row:
+                    continue
+                record = {}
+                for idx, header in enumerate(headers):
+                    record[header] = row[idx] if idx < len(row) else None
+                records.append(record)
+
+            duplicates = find_duplicate_values(records, unique_column)
+            if duplicates:
+                duplicate_preview = ", ".join(duplicates[:5])
+                suffix = "..." if len(duplicates) > 5 else ""
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Column '{unique_column}' must contain unique values. Duplicates found: {duplicate_preview}{suffix}"
+                )
+
+            chart_config['unique_column'] = unique_column
+            chart_config['qualitative_column'] = qualitative_column
+            chart_config['quantitative_columns'] = quantitative_columns
+            chart_config['quantitative_labels'] = quantitative_labels
+            chart_config['value_formatting'] = sanitized_formatting
+            chart_config['source_type'] = chart_request.source_type
+            chart_config['source_id'] = chart_request.source_id
+
+            x_axis_column = unique_column
+            y_axis_column = None
+        else:
+            chart_config.update({
+                "source_type": chart_request.source_type,
+                "source_id": chart_request.source_id
+            })
+            x_axis_column = chart_request.x_axis_column
+            y_axis_column = chart_request.y_axis_column
         
         # Create chart (unified charts don't need project_id)
         chart_id = chart_repo.create_chart(
@@ -1452,8 +1656,8 @@ async def create_unified_chart(chart_request: UnifiedChartCreateRequest, current
             sheet_id=sheet_id,
             chart_name=chart_request.chart_name,
             chart_type=chart_request.chart_type,
-            x_axis_column=chart_request.x_axis_column,
-            y_axis_column=chart_request.y_axis_column,
+            x_axis_column=x_axis_column,
+            y_axis_column=y_axis_column,
             chart_config=chart_config,
             project_id=None  # Unified charts are project-agnostic
         )
@@ -1571,6 +1775,28 @@ async def get_chart_data(chart_id: int, current_user: User = Depends(get_current
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Failed to fetch transformation data: {str(e)}")
                 
+        elif source_type == "qualitative":
+            # Get data from specific qualitative operation table
+            try:
+                qual_op = db.query(QualitativeDataOperation).filter(
+                    QualitativeDataOperation.id == source_id
+                ).first()
+                if not qual_op or qual_op.status != 'completed':
+                    raise HTTPException(status_code=404, detail="Qualitative operation not completed")
+                    
+                with engine.connect() as conn:
+                    result = conn.execute(text(f"SELECT * FROM {qual_op.output_table_name} LIMIT 1000"))
+                    rows = result.fetchall()
+                    
+                    if not rows:
+                        raise HTTPException(status_code=404, detail="No data in qualitative table")
+                    
+                    columns = list(result.keys())
+                    values = [columns] + [list(row) for row in rows]
+                    
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to fetch qualitative data: {str(e)}")
+                
         elif chart.project_id:
             # Get data from project (transformation or join)
             # For now, try to get data from the most recent executed transformation or join
@@ -1612,9 +1838,46 @@ async def get_chart_data(chart_id: int, current_user: User = Depends(get_current
         
         headers = values[0]
         data_rows = values[1:]
-        
+
+        chart_type_lower = chart.chart_type.lower()
+
+        if chart_type_lower == 'qualitative_cards':
+            unique_column = chart.chart_config.get('unique_column')
+            qualitative_column = chart.chart_config.get('qualitative_column')
+            quantitative_columns = chart.chart_config.get('quantitative_columns', [])
+
+            raw_records = []
+            for row in data_rows:
+                if not row:
+                    continue
+                record = {}
+                for idx, header in enumerate(headers):
+                    record[header] = row[idx] if idx < len(row) else None
+                raw_records.append(record)
+
+            duplicates = find_duplicate_values(raw_records, unique_column) if unique_column else []
+            metadata = {
+                "unique_column": unique_column,
+                "qualitative_column": qualitative_column,
+                "quantitative_columns": quantitative_columns,
+                "is_unique": len(duplicates) == 0,
+                "duplicate_values": duplicates
+            }
+
+            return {
+                "chart_id": chart.id,
+                "chart_name": chart.chart_name,
+                "chart_type": chart.chart_type,
+                "data": {
+                    "raw_data": raw_records,
+                    "metadata": metadata
+                },
+                "options": {},
+                "chart_config": chart.chart_config
+            }
+
         # For table charts, we don't need specific column indices
-        if chart.chart_type.lower() == 'table':
+        if chart_type_lower == 'table':
             # Convert data to dict format for easier table rendering
             table_data = []
             for row in data_rows:
@@ -1772,7 +2035,7 @@ def process_chart_data(data_rows, x_col_idx, y_col_idx, chart_type, chart_config
 
 @app.get("/data-sources")
 async def get_all_data_sources(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Get all available data sources (sheets, AI transformations, joins) for chart creation"""
+    """Get all available data sources (sheets, AI transformations, joins, qualitative) for chart creation"""
     try:
         data_sources = []
 

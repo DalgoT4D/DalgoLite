@@ -18,6 +18,7 @@ import {
   PieController
 } from 'chart.js'
 import { Bar, Line, Pie, Scatter } from 'react-chartjs-2'
+import QualitativeCardsChart from './QualitativeCardsChart'
 
 ChartJS.register(
   CategoryScale,
@@ -41,20 +42,27 @@ interface ChartRendererProps {
   options?: any
   title?: string
   selectedColumns?: string[]
+  chartConfig?: any
 }
 
 export interface ChartRendererRef {
   exportToPNG: (filename?: string) => void
 }
 
-const ChartRenderer = forwardRef<ChartRendererRef, ChartRendererProps>(({ type, data, options, title, selectedColumns }, ref) => {
+const ChartRenderer = forwardRef<ChartRendererRef, ChartRendererProps>(({ type, data, options, title, selectedColumns, chartConfig }, ref) => {
   const chartRef = useRef<any>(null)
+  const chartType = type.toLowerCase()
 
   useImperativeHandle(ref, () => ({
     exportToPNG: (filename = 'chart.png') => {
+      if (chartType === 'qualitative_cards') {
+        console.warn('Export to PNG is not supported for Qualitative Cards charts yet.')
+        return
+      }
+
       if (chartRef.current) {
         const chartInstance = chartRef.current
-        
+
         // Store original background color
         const originalBackgroundColor = chartInstance.options.plugins?.legend?.backgroundColor
         
@@ -181,7 +189,7 @@ const ChartRenderer = forwardRef<ChartRendererRef, ChartRendererProps>(({ type, 
   }
 
   const renderChart = () => {
-    switch (type.toLowerCase()) {
+    switch (chartType) {
       case 'bar':
       case 'histogram':
         return <Bar ref={chartRef} data={data} options={options} />
@@ -193,6 +201,15 @@ const ChartRenderer = forwardRef<ChartRendererRef, ChartRendererProps>(({ type, 
         return <Scatter ref={chartRef} data={data} options={options} />
       case 'table':
         return renderTable()
+      case 'qualitative_cards':
+        return (
+          <QualitativeCardsChart
+            data={data}
+            title={title}
+            config={chartConfig}
+            metadata={data?.metadata}
+          />
+        )
       default:
         return <Bar ref={chartRef} data={data} options={options} />
     }
