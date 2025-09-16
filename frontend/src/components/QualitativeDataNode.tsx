@@ -61,11 +61,11 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
 
   const getStatusDisplayText = (status: string) => {
     switch (status) {
-      case 'pending': return 'Ready to analyze'
-      case 'running': return 'Analyzing...'
-      case 'completed': return 'Analysis complete'
-      case 'failed': return 'Analysis failed'
-      default: return 'Ready to analyze'
+      case 'pending': return 'Ready to execute'
+      case 'running': return 'Executing...'
+      case 'completed': return 'Execution complete'
+      case 'failed': return 'Execution failed'
+      default: return 'Ready to execute'
     }
   }
 
@@ -208,7 +208,15 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
             {operation.output_table_name && operation.status === 'completed' && (
               <div>
                 <div className="text-xs font-medium text-gray-700 mb-1">Output Table:</div>
-                <div className="text-sm bg-green-50 border border-green-200 p-2 rounded font-mono">
+                <div 
+                  className={`text-sm bg-green-50 border border-green-200 p-2 rounded font-mono ${
+                    onViewData && operation.status === 'completed' && !operation.error_message
+                      ? 'cursor-pointer hover:bg-green-100 transition-colors'
+                      : ''
+                  }`}
+                  onClick={onViewData && operation.status === 'completed' && !operation.error_message ? () => onViewData(operation.id, operation.name) : undefined}
+                  title={onViewData && operation.status === 'completed' && !operation.error_message ? 'Click to view data' : undefined}
+                >
                   🧠 {operation.output_table_name}
                 </div>
               </div>
@@ -234,7 +242,7 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
               <button
                 onClick={() => onEdit && onEdit(operation.id)}
                 className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
-                title="Edit qualitative analysis"
+                title="Edit qualitative operation"
               >
                 <Edit3 size={14} />
               </button>
@@ -248,10 +256,10 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
                   }`}
                   title={
                     operation.status === 'completed' && !operation.error_message
-                      ? "View analysis results" 
+                      ? "View execution results" 
                       : operation.error_message 
-                        ? "Cannot view results - analysis has errors" 
-                        : "Run the analysis to see results"
+                        ? "Cannot view results - execution has errors" 
+                        : "Run the execution to see results"
                   }
                   disabled={operation.status !== 'completed' || !!operation.error_message}
                 >
@@ -262,7 +270,7 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
                 <button
                   onClick={() => onDelete(operation.id)}
                   className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
-                  title="Delete qualitative analysis"
+                  title="Delete qualitative operation"
                 >
                   <Trash2 size={14} />
                 </button>
@@ -280,20 +288,20 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
                       ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                       : 'bg-blue-600 hover:bg-blue-700 text-white'
                   }`}
-                  title="Run qualitative analysis"
+                  title="Run qualitative operation"
                 >
                   <Play size={12} />
-                  Analyze
+                  Execute
                 </button>
               )}
               {(isExecuting || operation.status === 'running') && (
                 <button
                   disabled
                   className="flex items-center gap-1 px-3 py-1.5 rounded text-xs font-medium bg-gray-300 text-gray-500 cursor-not-allowed"
-                  title="Running analysis..."
+                  title="Running execution..."
                 >
                   <Loader2 size={12} className="animate-spin" />
-                  Analyzing...
+                  Executing...
                 </button>
               )}
             </div>

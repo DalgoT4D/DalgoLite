@@ -333,7 +333,15 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
           {getOutputTableName() && step.status === 'completed' && (
             <div>
               <div className="text-xs font-medium text-gray-700 mb-1">Output Table:</div>
-              <div className="text-sm bg-green-50 border border-green-200 p-2 rounded font-mono">
+              <div 
+                className={`text-sm bg-green-50 border border-green-200 p-2 rounded font-mono ${
+                  onViewData && step.status === 'completed' && !step.error_message
+                    ? 'cursor-pointer hover:bg-green-100 transition-colors'
+                    : ''
+                }`}
+                onClick={onViewData && step.status === 'completed' && !step.error_message ? () => onViewData(step.id, step.step_name, step.status) : undefined}
+                title={onViewData && step.status === 'completed' && !step.error_message ? 'Click to view data' : undefined}
+              >
                 📊 {getOutputTableName()}
               </div>
               {step.output_columns && step.output_columns.length > 0 && (

@@ -1852,6 +1852,31 @@ async def get_all_data_sources(current_user: User = Depends(get_current_user), d
                 }
             })
         
+        # Get all completed qualitative data operations for user's projects only
+        qual_ops = db.query(QualitativeDataOperation).filter(
+            QualitativeDataOperation.project_id.in_(user_project_ids),
+            QualitativeDataOperation.status == 'completed'
+        ).all()
+
+        for qual_op in qual_ops:
+            # Get project info for context (already filtered by user)
+            project = next((p for p in user_projects if p.id == qual_op.project_id), None)
+            
+            data_sources.append({
+                "id": f"qualitative-{qual_op.id}",
+                "type": "qualitative",
+                "name": f"{qual_op.name} ({project.name if project else 'Unknown Project'})",
+                "display_name": f"🧠 {qual_op.name}",
+                "columns": qual_op.output_columns or [],
+                "metadata": {
+                    "project_id": qual_op.project_id,
+                    "project_name": project.name if project else "Unknown Project",
+                    "analysis_type": qual_op.analysis_type,
+                    "qualitative_column": qual_op.qualitative_column,
+                    "output_table_name": qual_op.output_table_name
+                }
+            })
+        
         return {"data_sources": data_sources}
         
     except HTTPException:

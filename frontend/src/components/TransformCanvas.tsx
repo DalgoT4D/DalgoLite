@@ -1004,30 +1004,20 @@ export default function TransformCanvas({
 
   const handleCreateJoin = useCallback(() => {
     if (contextMenu) {
-      // Convert screen coordinates to canvas coordinates
-      const canvasRect = document.querySelector('.react-flow')?.getBoundingClientRect()
-      if (canvasRect) {
-        const canvasX = contextMenu.x - canvasRect.left - 100
-        const canvasY = contextMenu.y - canvasRect.top - 50
-        setJoinModalPosition({ x: Math.max(0, canvasX), y: Math.max(0, canvasY) })
-      } else {
-        setJoinModalPosition({ x: 200, y: 200 })
-      }
+      // Center the modal on screen instead of using context menu position
+      const centerX = window.innerWidth / 2 - 200 // Approximate half of modal width
+      const centerY = window.innerHeight / 2 - 250 // Approximate half of modal height
+      setJoinModalPosition({ x: Math.max(20, centerX), y: Math.max(20, centerY) })
       setShowJoinModal(true)
     }
   }, [contextMenu])
 
   const handleCreateQualitativeData = useCallback(() => {
     if (contextMenu) {
-      // Convert screen coordinates to canvas coordinates
-      const canvasRect = document.querySelector('.react-flow')?.getBoundingClientRect()
-      if (canvasRect) {
-        const canvasX = contextMenu.x - canvasRect.left - 100
-        const canvasY = contextMenu.y - canvasRect.top - 50
-        setQualitativeModalPosition({ x: Math.max(0, canvasX), y: Math.max(0, canvasY) })
-      } else {
-        setQualitativeModalPosition({ x: 200, y: 200 })
-      }
+      // Center the modal on screen instead of using context menu position
+      const centerX = window.innerWidth / 2 - 224 // Half of modal width (448px)
+      const centerY = window.innerHeight / 2 - 300 // Approximate half of modal height
+      setQualitativeModalPosition({ x: Math.max(20, centerX), y: Math.max(20, centerY) })
       setShowQualitativeModal(true)
     }
   }, [contextMenu])
