@@ -101,6 +101,8 @@ function ChartDisplay({ chartId }: ChartDisplayProps) {
         },
       }}
       title={chartData.chart_name}
+      selectedColumns={chartData.chart_config?.selected_columns}
+      chartConfig={chartData.chart_config}
     />
   )
 }
@@ -121,7 +123,7 @@ interface Chart {
 
 interface DataSource {
   id: string
-  type: 'sheet' | 'transformation' | 'join'
+  type: 'sheet' | 'transformation' | 'join' | 'qualitative'
   name: string
   display_name: string
   columns: string[]
@@ -147,7 +149,9 @@ const CHART_TYPES = [
   { value: 'line', label: 'Line Chart', description: 'Show trends over time or continuous data' },
   { value: 'pie', label: 'Pie Chart', description: 'Show proportions of a whole' },
   { value: 'scatter', label: 'Scatter Plot', description: 'Show relationship between two variables' },
-  { value: 'histogram', label: 'Histogram', description: 'Show distribution of a single variable' }
+  { value: 'histogram', label: 'Histogram', description: 'Show distribution of a single variable' },
+  { value: 'table', label: 'Table', description: 'Display data in rows and columns' },
+  { value: 'qualitative_cards', label: 'Qualitative Cards', description: 'Navigate qualitative text with supporting metrics' }
 ]
 
 const AGGREGATION_TYPES = [
@@ -157,6 +161,14 @@ const AGGREGATION_TYPES = [
   { value: 'min', label: 'Minimum', description: 'Find smallest numeric value' },
   { value: 'max', label: 'Maximum', description: 'Find largest numeric value' },
   { value: 'median', label: 'Median', description: 'Find middle value when sorted' }
+]
+
+const METRIC_FORMAT_OPTIONS = [
+  { value: 'auto', label: 'Default' },
+  { value: 'integer', label: 'Integer' },
+  { value: 'decimal', label: 'Decimal (2 places)' },
+  { value: 'percentage', label: 'Percentage' },
+  { value: 'currency', label: 'Currency (USD)' }
 ]
 
 export default function UnifiedChartsPage() {
@@ -180,10 +192,54 @@ export default function UnifiedChartsPage() {
     chart_type: 'bar',
     x_axis_column: '',
     y_axis_column: '',
-    aggregation_type: 'count'
+    aggregation_type: 'count',
+    selected_columns: [] as string[]
   })
+  const createEmptyQualitativeForm = () => ({
+    unique_column: '',
+    qualitative_column: '',
+    metrics: [
+      { column: '', label: '', formatting: 'auto' as string }
+    ]
+  })
+  const [qualitativeForm, setQualitativeForm] = useState(createEmptyQualitativeForm)
   
   const [saving, setSaving] = useState(false)
+  const qualitativeConfigReady = Boolean(
+    qualitativeForm.unique_column &&
+    qualitativeForm.qualitative_column
+  )
+
+  const updateMetric = (index: number, field: 'column' | 'label' | 'formatting', value: string) => {
+    setQualitativeForm(prev => {
+      const metrics = prev.metrics.map((metric, idx) => {
+        if (idx === index) {
+          return { ...metric, [field]: value }
+        }
+        return metric
+      })
+      return { ...prev, metrics }
+    })
+  }
+
+  const addMetric = () => {
+    setQualitativeForm(prev => {
+      if (prev.metrics.length >= 2) {
+        return prev
+      }
+      return {
+        ...prev,
+        metrics: [...prev.metrics, { column: '', label: '', formatting: 'auto' }]
+      }
+    })
+  }
+
+  const removeMetric = (index: number) => {
+    setQualitativeForm(prev => {
+      const metrics = prev.metrics.filter((_, idx) => idx !== index)
+      return { ...prev, metrics }
+    })
+  }
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -270,8 +326,26 @@ export default function UnifiedChartsPage() {
   }
 
   const handleCreateChart = async () => {
-    if (!chartForm.chart_name.trim() || !chartForm.x_axis_column || !selectedDataSource) return
-    
+    // For table and qualitative cards, handle requirements separately
+    if (!chartForm.chart_name.trim() || !selectedDataSource) return
+
+    const isQualitativeCards = chartForm.chart_type === 'qualitative_cards'
+
+    if (!isQualitativeCards && chartForm.chart_type !== 'table' && !chartForm.x_axis_column) return
+
+    let activeMetrics: { column: string; label: string; formatting: string }[] = []
+    if (isQualitativeCards) {
+      if (!qualitativeForm.unique_column || !qualitativeForm.qualitative_column) return
+      activeMetrics = qualitativeForm.metrics
+        .map(metric => ({
+          column: metric.column?.trim() || '',
+          label: metric.label?.trim() || '',
+          formatting: metric.formatting || 'auto'
+        }))
+        .filter(metric => metric.column)
+        .slice(0, 2)
+    }
+
     setSaving(true)
     try {
       // Extract numeric ID from prefixed string
@@ -282,25 +356,47 @@ export default function UnifiedChartsPage() {
         extractedSourceId = selectedDataSource.id.replace('join-', '')
       } else if (selectedDataSource.id.startsWith('transform-')) {
         extractedSourceId = selectedDataSource.id.replace('transform-', '')
+      } else if (selectedDataSource.id.startsWith('qualitative-')) {
+        extractedSourceId = selectedDataSource.id.replace('qualitative-', '')
       } else if (selectedDataSource.id.startsWith('project-')) {
         extractedSourceId = selectedDataSource.id.replace('project-', '')
       } else {
         extractedSourceId = selectedDataSource.id
       }
 
+      const quantitativeColumns = activeMetrics.map(metric => metric.column)
+      const quantitativeLabels = activeMetrics.map(metric => metric.label || metric.column)
+      const valueFormatting = activeMetrics.reduce((acc, metric) => {
+        if (metric.formatting && metric.formatting !== 'auto') {
+          acc[metric.column] = metric.formatting
+        }
+        return acc
+      }, {} as Record<string, string>)
+
       const requestData = {
         chart_name: chartForm.chart_name,
         chart_type: chartForm.chart_type,
-        x_axis_column: chartForm.x_axis_column,
-        y_axis_column: chartForm.y_axis_column || undefined,
-        chart_config: {
-          aggregation_type: chartForm.aggregation_type
-        },
+        x_axis_column: isQualitativeCards ? qualitativeForm.unique_column : chartForm.x_axis_column,
+        y_axis_column: isQualitativeCards ? undefined : chartForm.y_axis_column || undefined,
+        chart_config: isQualitativeCards
+          ? {
+              unique_column: qualitativeForm.unique_column,
+              qualitative_column: qualitativeForm.qualitative_column,
+              quantitative_columns: quantitativeColumns,
+              quantitative_labels: quantitativeLabels,
+              value_formatting: valueFormatting
+            }
+          : {
+              aggregation_type: chartForm.aggregation_type,
+              selected_columns: chartForm.chart_type === 'table' ? chartForm.selected_columns : undefined
+            },
         source_type: selectedDataSource.type,
         source_id: extractedSourceId
         // No project_id needed - unified charts are project-agnostic!
       }
 
+      console.log('DEBUG: About to send request:', requestData)
+      
       const response = await fetch(getApiUrl('/charts/unified'), {
         method: 'POST',
         headers: {
@@ -330,19 +426,56 @@ export default function UnifiedChartsPage() {
   }
 
   const handleUpdateChart = async () => {
-    if (!editingChart || !chartForm.chart_name.trim() || !chartForm.x_axis_column) return
-    
+    if (!editingChart || !chartForm.chart_name.trim()) return
+
+    const isQualitativeCards = chartForm.chart_type === 'qualitative_cards'
+    if (!isQualitativeCards && chartForm.chart_type !== 'table' && !chartForm.x_axis_column) return
+
+    let activeMetrics: { column: string; label: string; formatting: string }[] = []
+    if (isQualitativeCards) {
+      if (!qualitativeForm.unique_column || !qualitativeForm.qualitative_column) return
+      activeMetrics = qualitativeForm.metrics
+        .map(metric => ({
+          column: metric.column?.trim() || '',
+          label: metric.label?.trim() || '',
+          formatting: metric.formatting || 'auto'
+        }))
+        .filter(metric => metric.column)
+        .slice(0, 2)
+    }
+
     setSaving(true)
     try {
+      const quantitativeColumns = activeMetrics.map(metric => metric.column)
+      const quantitativeLabels = activeMetrics.map(metric => metric.label || metric.column)
+      const valueFormatting = activeMetrics.reduce((acc, metric) => {
+        if (metric.formatting && metric.formatting !== 'auto') {
+          acc[metric.column] = metric.formatting
+        }
+        return acc
+      }, {} as Record<string, string>)
+
+      const baseConfig = { ...editingChart.chart_config }
+
       const requestData = {
         chart_name: chartForm.chart_name,
         chart_type: chartForm.chart_type,
-        x_axis_column: chartForm.x_axis_column,
-        y_axis_column: chartForm.y_axis_column || undefined,
-        chart_config: {
-          ...editingChart.chart_config,
-          aggregation_type: chartForm.aggregation_type
-        }
+        x_axis_column: isQualitativeCards ? qualitativeForm.unique_column : chartForm.x_axis_column,
+        y_axis_column: isQualitativeCards ? undefined : chartForm.y_axis_column || undefined,
+        chart_config: isQualitativeCards
+          ? {
+              ...baseConfig,
+              unique_column: qualitativeForm.unique_column,
+              qualitative_column: qualitativeForm.qualitative_column,
+              quantitative_columns: quantitativeColumns,
+              quantitative_labels: quantitativeLabels,
+              value_formatting: valueFormatting
+            }
+          : {
+              ...baseConfig,
+              aggregation_type: chartForm.aggregation_type,
+              selected_columns: chartForm.chart_type === 'table' ? chartForm.selected_columns : undefined
+            }
       }
 
       const response = await fetch(getApiUrl(`/charts/${editingChart.id}`), {
@@ -393,20 +526,57 @@ export default function UnifiedChartsPage() {
       chart_type: 'bar',
       x_axis_column: '',
       y_axis_column: '',
-      aggregation_type: 'count'
+      aggregation_type: 'count',
+      selected_columns: []
     })
     setSelectedDataSource(null)
+    setQualitativeForm(createEmptyQualitativeForm())
   }
 
   const startEditChart = (chart: Chart) => {
     setEditingChart(chart)
+    
+    // Find the data source for this chart
+    const sourceType = chart.chart_config?.source_type || chart.source_type
+    const sourceId = chart.chart_config?.source_id || chart.source_id
+    const dataSource = dataSources.find(ds => 
+      ds.type === sourceType && ds.id === `${sourceType}-${sourceId}`
+    )
+    
+    if (dataSource) {
+      setSelectedDataSource(dataSource)
+    }
+    
     setChartForm({
       chart_name: chart.chart_name,
       chart_type: chart.chart_type,
       x_axis_column: chart.x_axis_column,
       y_axis_column: chart.y_axis_column || '',
-      aggregation_type: chart.chart_config?.aggregation_type || 'count'
+      aggregation_type: chart.chart_config?.aggregation_type || 'count',
+      selected_columns: chart.chart_config?.selected_columns || []
     })
+
+    if (chart.chart_type === 'qualitative_cards') {
+      const quantitativeColumns = chart.chart_config?.quantitative_columns || []
+      const quantitativeLabels = chart.chart_config?.quantitative_labels || []
+      const formatting = chart.chart_config?.value_formatting || {}
+
+      const metrics = quantitativeColumns.length > 0
+        ? quantitativeColumns.slice(0, 2).map((col: string, idx: number) => ({
+            column: col,
+            label: quantitativeLabels[idx] || '',
+            formatting: formatting[col] || 'auto'
+          }))
+        : [{ column: '', label: '', formatting: 'auto' }]
+
+      setQualitativeForm({
+        unique_column: chart.chart_config?.unique_column || '',
+        qualitative_column: chart.chart_config?.qualitative_column || '',
+        metrics
+      })
+    } else {
+      setQualitativeForm(createEmptyQualitativeForm())
+    }
   }
 
   const cancelEdit = () => {
@@ -423,8 +593,10 @@ export default function UnifiedChartsPage() {
       chart_type: recommendation.type,
       x_axis_column: recommendation.x_axis,
       y_axis_column: recommendation.y_axis || '',
-      aggregation_type: recommendation.y_axis ? 'sum' : 'count'
+      aggregation_type: recommendation.y_axis ? 'sum' : 'count',
+      selected_columns: []
     })
+    setQualitativeForm(createEmptyQualitativeForm())
     setShowCreateChart(true)
     setShowRecommendations(false)
   }
@@ -510,45 +682,55 @@ export default function UnifiedChartsPage() {
                   </span>
                 </div>
                 
-                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-                  {charts.map((chart) => (
-                        <div key={chart.id} className="border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-lg transition-all duration-200">
-                          <div className="flex justify-between items-start mb-4">
-                            <div className="flex-1 min-w-0">
-                              <h4 className="text-sm font-semibold text-gray-900 mb-1 truncate">{chart.chart_name}</h4>
-                              <p className="text-xs text-gray-600 mb-1 truncate">{chart.source_name}</p>
-                              <p className="text-xs text-gray-500 capitalize">{chart.chart_type} chart</p>
-                            </div>
-                            <div className="flex items-center gap-1 ml-2">
-                              <button
-                                onClick={() => startEditChart(chart)}
-                                className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                              >
-                                <Edit2 size={14} />
-                              </button>
-                              <button
-                                onClick={() => handleDeleteChart(chart.id)}
-                                className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3 gap-8">
+                  {charts.map((chart) => {
+                    const isQualitativeCards = chart.chart_type === 'qualitative_cards'
+                    return (
+                      <div 
+                        key={chart.id} 
+                        className={`border border-gray-200 rounded-xl p-6 hover:border-blue-300 hover:shadow-xl transition-all duration-200 bg-white ${
+                          isQualitativeCards ? 'lg:col-span-2 xl:col-span-2 2xl:col-span-2' : ''
+                        }`}
+                      >
+                        <div className="flex justify-between items-start mb-6">
+                          <div className="flex-1 min-w-0">
+                            <h4 className="text-lg font-semibold text-gray-900 mb-2 truncate">{chart.chart_name}</h4>
+                            <p className="text-sm text-gray-600 mb-1 truncate">{chart.source_name}</p>
+                            <p className="text-sm text-gray-500 capitalize font-medium">{chart.chart_type} chart</p>
                           </div>
-                          
-                          <div className="h-40 bg-gray-50 rounded-lg p-2 relative group">
-                            <ChartDisplay chartId={chart.id} />
-                            <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-opacity rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100">
-                              <button
-                                onClick={() => router.push(`/charts/${chart.id}/view?from=charts`)}
-                                className="bg-white hover:bg-gray-100 text-gray-900 px-4 py-2 rounded-lg shadow-md flex items-center gap-2 transition-colors"
-                              >
-                                <Eye size={16} />
-                                View Larger
-                              </button>
-                            </div>
+                          <div className="flex items-center gap-2 ml-4">
+                            <button
+                              onClick={() => startEditChart(chart)}
+                              className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteChart(chart.id)}
+                              className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                            >
+                              <Trash2 size={16} />
+                            </button>
                           </div>
                         </div>
-                  ))}
+                        
+                        <div className={`bg-gradient-to-br from-gray-50 to-gray-100/50 rounded-xl p-4 relative group ${
+                          isQualitativeCards ? 'h-96' : 'h-64'
+                        }`}>
+                          <ChartDisplay chartId={chart.id} />
+                          <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-opacity rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100">
+                            <button
+                              onClick={() => router.push(`/charts/${chart.id}/view?from=charts`)}
+                              className="bg-white hover:bg-gray-100 text-gray-900 px-6 py-3 rounded-xl shadow-lg flex items-center gap-3 transition-colors font-semibold"
+                            >
+                              <Eye size={18} />
+                              View Larger
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )}
@@ -689,8 +871,10 @@ export default function UnifiedChartsPage() {
                           setChartForm(prev => ({
                             ...prev,
                             x_axis_column: '',
-                            y_axis_column: ''
+                            y_axis_column: '',
+                            selected_columns: []
                           }))
+                          setQualitativeForm(createEmptyQualitativeForm())
                         }}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                       >
@@ -718,7 +902,18 @@ export default function UnifiedChartsPage() {
                               ? 'border-blue-500 bg-blue-50'
                               : 'border-gray-300 hover:border-gray-400'
                           }`}
-                          onClick={() => setChartForm(prev => ({ ...prev, chart_type: type.value }))}
+                          onClick={() => {
+                            setChartForm(prev => ({
+                              ...prev,
+                              chart_type: type.value,
+                              x_axis_column: ['table', 'qualitative_cards'].includes(type.value) ? '' : prev.x_axis_column,
+                              y_axis_column: ['pie', 'histogram', 'table', 'qualitative_cards'].includes(type.value) ? '' : prev.y_axis_column,
+                              selected_columns: type.value === 'table' ? prev.selected_columns : []
+                            }))
+                            if (type.value === 'qualitative_cards') {
+                              setQualitativeForm(createEmptyQualitativeForm())
+                            }
+                          }}
                         >
                           <p className="font-medium text-gray-900">{type.label}</p>
                           <p className="text-sm text-gray-600">{type.description}</p>
@@ -727,8 +922,124 @@ export default function UnifiedChartsPage() {
                     </div>
                   </div>
 
-                  {/* X-Axis Column */}
-                  {selectedDataSource && (
+                  {/* Configuration for Qualitative Cards */}
+                  {selectedDataSource && chartForm.chart_type === 'qualitative_cards' ? (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Unique Identifier Column
+                        </label>
+                        <select
+                          value={qualitativeForm.unique_column}
+                          onChange={(e) => setQualitativeForm(prev => ({ ...prev, unique_column: e.target.value }))}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="">Select a column</option>
+                          {selectedDataSource.columns.map((column, idx) => (
+                            <option key={idx} value={column}>{column}</option>
+                          ))}
+                        </select>
+                        <p className="text-xs text-gray-500 mt-1">
+                          This column must contain unique values. Duplicate entries will prevent the chart from being created.
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Qualitative Text Column
+                        </label>
+                        <select
+                          value={qualitativeForm.qualitative_column}
+                          onChange={(e) => setQualitativeForm(prev => ({ ...prev, qualitative_column: e.target.value }))}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="">Select a column</option>
+                          {selectedDataSource.columns.map((column, idx) => (
+                            <option key={idx} value={column}>{column}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700">
+                              Subtitle Metrics <span className="text-gray-500 font-normal">(Optional)</span>
+                            </label>
+                            <p className="text-xs text-gray-500">Pick one or two numeric columns to show beneath the qualitative text.</p>
+                          </div>
+                          {qualitativeForm.metrics.length < 2 && (
+                            <button
+                              type="button"
+                              onClick={addMetric}
+                              className="text-sm text-blue-600 hover:text-blue-800"
+                            >
+                              + Add metric
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="space-y-3">
+                          {qualitativeForm.metrics.map((metric, idx) => (
+                            <div key={idx} className="grid grid-cols-1 md:grid-cols-3 gap-3 border border-gray-200 rounded-lg p-3">
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1">
+                                  Metric Column {idx + 1}
+                                </label>
+                                <select
+                                  value={metric.column}
+                                  onChange={(e) => updateMetric(idx, 'column', e.target.value)}
+                                  className="w-full px-2 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                >
+                                  <option value="">Select column</option>
+                                  {selectedDataSource.columns.map((column, columnIdx) => (
+                                    <option key={columnIdx} value={column}>{column}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600 mb-1">
+                                  Display Label (optional)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={metric.label}
+                                  onChange={(e) => updateMetric(idx, 'label', e.target.value)}
+                                  placeholder="Shown below the value"
+                                  className="w-full px-2 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                />
+                              </div>
+                              <div className="flex items-end gap-2">
+                                <div className="flex-1">
+                                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                                    Formatting
+                                  </label>
+                                  <select
+                                    value={metric.formatting}
+                                    onChange={(e) => updateMetric(idx, 'formatting', e.target.value)}
+                                    className="w-full px-2 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                  >
+                                    {METRIC_FORMAT_OPTIONS.map(option => (
+                                      <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                {(qualitativeForm.metrics.length > 1 || idx === qualitativeForm.metrics.length - 1) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeMetric(idx)}
+                                    className="text-xs text-red-600 hover:text-red-800 mt-auto"
+                                  >
+                                    Remove
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : selectedDataSource && chartForm.chart_type !== 'table' && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         X-Axis Column
@@ -746,8 +1057,8 @@ export default function UnifiedChartsPage() {
                     </div>
                   )}
 
-                  {/* Y-Axis Column */}
-                  {!['pie', 'histogram'].includes(chartForm.chart_type) && selectedDataSource && (
+                  {/* Y-Axis Column - Hide for pie, histogram, table, and qualitative cards */}
+                  {!['pie', 'histogram', 'table', 'qualitative_cards'].includes(chartForm.chart_type) && selectedDataSource && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         Y-Axis Column (optional)
@@ -765,23 +1076,85 @@ export default function UnifiedChartsPage() {
                     </div>
                   )}
 
-                  {/* Aggregation Type */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Data Aggregation
-                    </label>
-                    <select
-                      value={chartForm.aggregation_type}
-                      onChange={(e) => setChartForm(prev => ({ ...prev, aggregation_type: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      {AGGREGATION_TYPES.map((aggType) => (
-                        <option key={aggType.value} value={aggType.value}>
-                          {aggType.label} - {aggType.description}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  {/* Column Selection for Table Charts */}
+                  {chartForm.chart_type === 'table' && selectedDataSource && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Select Columns to Display
+                      </label>
+                      <div className="space-y-2 max-h-48 overflow-y-auto border border-gray-300 rounded-lg p-3">
+                        <div className="flex items-center">
+                          <input
+                            type="checkbox"
+                            id="select-all-columns"
+                            checked={chartForm.selected_columns.length === selectedDataSource.columns.length}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setChartForm(prev => ({ ...prev, selected_columns: [...selectedDataSource.columns] }))
+                              } else {
+                                setChartForm(prev => ({ ...prev, selected_columns: [] }))
+                              }
+                            }}
+                            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                          />
+                          <label htmlFor="select-all-columns" className="ml-2 text-sm font-medium text-gray-900">
+                            Select All
+                          </label>
+                        </div>
+                        {selectedDataSource.columns.map((column) => (
+                          <div key={column} className="flex items-center">
+                            <input
+                              type="checkbox"
+                              id={`column-${column}`}
+                              checked={chartForm.selected_columns.includes(column)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setChartForm(prev => ({ 
+                                    ...prev, 
+                                    selected_columns: [...prev.selected_columns, column] 
+                                  }))
+                                } else {
+                                  setChartForm(prev => ({ 
+                                    ...prev, 
+                                    selected_columns: prev.selected_columns.filter(col => col !== column) 
+                                  }))
+                                }
+                              }}
+                              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                            />
+                            <label htmlFor={`column-${column}`} className="ml-2 text-sm text-gray-700">
+                              {column}
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                      {chartForm.selected_columns.length === 0 && (
+                        <p className="text-sm text-amber-600 mt-1">
+                          No columns selected. All columns will be displayed by default.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Aggregation Type - Hide for table and qualitative cards */}
+                  {!['table', 'qualitative_cards'].includes(chartForm.chart_type) && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Data Aggregation
+                      </label>
+                      <select
+                        value={chartForm.aggregation_type}
+                        onChange={(e) => setChartForm(prev => ({ ...prev, aggregation_type: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        {AGGREGATION_TYPES.map((aggType) => (
+                          <option key={aggType.value} value={aggType.value}>
+                            {aggType.label} - {aggType.description}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex justify-end gap-3 mt-8 pt-6 border-t">
@@ -800,7 +1173,14 @@ export default function UnifiedChartsPage() {
                   </button>
                   <button
                     onClick={editingChart ? handleUpdateChart : handleCreateChart}
-                    disabled={!chartForm.chart_name.trim() || !chartForm.x_axis_column || (!selectedDataSource && !editingChart) || saving}
+                    disabled={
+                      !chartForm.chart_name.trim() || 
+                      (!selectedDataSource && !editingChart) || 
+                      (chartForm.chart_type === 'qualitative_cards'
+                        ? !qualitativeConfigReady
+                        : chartForm.chart_type !== 'table' && !chartForm.x_axis_column) ||
+                      saving
+                    }
                     className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-6 py-2 rounded-lg flex items-center gap-2 transition-colors"
                   >
                     <Save size={18} />

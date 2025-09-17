@@ -59,6 +59,7 @@ export default function ProjectCanvasPage() {
   const [sheets, setSheets] = useState<ConnectedSheet[]>([])
   const [transformationSteps, setTransformationSteps] = useState<TransformationStep[]>([])
   const [joins, setJoins] = useState<any[]>([])
+  const [qualitativeDataOperations, setQualitativeDataOperations] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showAutomation, setShowAutomation] = useState(false)
@@ -106,6 +107,13 @@ export default function ProjectCanvasPage() {
       if (joinsResponse.ok) {
         const joinsData = await joinsResponse.json()
         setJoins(joinsData.joins || [])
+      }
+
+      // Fetch qualitative data operations
+      const qualitativeResponse = await fetch(getApiUrl(`/projects/${projectId}/qualitative-data`))
+      if (qualitativeResponse.ok) {
+        const qualitativeData = await qualitativeResponse.json()
+        setQualitativeDataOperations(qualitativeData.operations || [])
       }
 
     } catch (err) {
@@ -261,6 +269,32 @@ export default function ProjectCanvasPage() {
     }
   }
 
+  const handleTransformationCreated = async () => {
+    try {
+      // Refresh transformation steps
+      const transformationResponse = await fetch(getApiUrl(`/projects/${projectId}/transformation-steps`))
+      if (transformationResponse.ok) {
+        const transformationData = await transformationResponse.json()
+        setTransformationSteps(transformationData.steps || [])
+      }
+    } catch (err) {
+      console.error('Error refreshing transformation steps:', err)
+    }
+  }
+
+  const handleQualitativeDataCreated = async () => {
+    try {
+      // Refresh qualitative data operations
+      const qualitativeResponse = await fetch(getApiUrl(`/projects/${projectId}/qualitative-data`))
+      if (qualitativeResponse.ok) {
+        const qualitativeData = await qualitativeResponse.json()
+        setQualitativeDataOperations(qualitativeData.operations || [])
+      }
+    } catch (err) {
+      console.error('Error refreshing qualitative data operations:', err)
+    }
+  }
+
   if (loading) {
     return (
       <DashboardLayout isAuthenticated={isAuthenticated} onLogout={logout}>
@@ -346,11 +380,14 @@ export default function ProjectCanvasPage() {
             sheets={sheets}
             transformationSteps={transformationSteps}
             joins={joins}
+            qualitativeDataOperations={qualitativeDataOperations}
             onCreateTransformationStep={handleCreateTransformationStep}
             onUpdateTransformationStep={handleUpdateTransformationStep}
             onExecuteStep={handleExecuteStep}
             onExecuteAll={handleExecuteAll}
             onDeleteTransformationStep={handleDeleteTransformationStep}
+            onTransformationCreated={handleTransformationCreated}
+            onQualitativeDataCreated={handleQualitativeDataCreated}
           />
         </div>
 

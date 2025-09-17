@@ -50,8 +50,10 @@ if [ ! -z "$FRONTEND_PIDS" ]; then
     echo $FRONTEND_PIDS | xargs kill -9 2>/dev/null
 fi
 
+
 # Kill any Node processes on port 3035
 NODE_PIDS=$(lsof -ti:3035)
+
 if [ ! -z "$NODE_PIDS" ]; then
     echo "🔥 Killing processes on port 3035: $NODE_PIDS"
     echo $NODE_PIDS | xargs kill -9 2>/dev/null
@@ -59,6 +61,7 @@ fi
 
 # Kill any Python processes on port 8035
 PYTHON_PIDS=$(lsof -ti:8035)
+
 if [ ! -z "$PYTHON_PIDS" ]; then
     echo "🔥 Killing processes on port 8035: $PYTHON_PIDS"
     echo $PYTHON_PIDS | xargs kill -9 2>/dev/null

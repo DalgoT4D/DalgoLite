@@ -193,7 +193,15 @@ export default function JoinNode({ data, selected }: JoinNodeProps) {
           {join.outputTableName && join.status === 'completed' && (
             <div>
               <div className="text-xs font-medium text-gray-700 mb-1">Output Table:</div>
-              <div className="text-sm bg-green-50 border border-green-200 p-2 rounded font-mono">
+              <div 
+                className={`text-sm bg-green-50 border border-green-200 p-2 rounded font-mono ${
+                  onViewData && join.status === 'completed' && !join.errorMessage
+                    ? 'cursor-pointer hover:bg-green-100 transition-colors'
+                    : ''
+                }`}
+                onClick={onViewData && join.status === 'completed' && !join.errorMessage ? () => onViewData(join.id, join.name) : undefined}
+                title={onViewData && join.status === 'completed' && !join.errorMessage ? 'Click to view data' : undefined}
+              >
                 📊 {join.outputTableName}
               </div>
             </div>

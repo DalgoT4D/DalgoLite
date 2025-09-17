@@ -39,7 +39,7 @@ class ChartCreationService:
                 }
             
             # Validate chart type
-            valid_chart_types = ['bar', 'line', 'pie', 'scatter', 'histogram']
+            valid_chart_types = ['bar', 'line', 'pie', 'scatter', 'histogram', 'qualitative_cards']
             if chart_type not in valid_chart_types:
                 return {
                     "success": False,

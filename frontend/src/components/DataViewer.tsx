@@ -1,14 +1,14 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
-import { X, Download, Search, ChevronLeft, ChevronRight, Eye, FileText, Layers, Database } from 'lucide-react'
+import { X, Download, Search, ChevronLeft, ChevronRight, Eye, FileText, Layers, Database, Brain } from 'lucide-react'
 import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 interface DataViewerProps {
   isOpen: boolean
   onClose: () => void
   sourceId: string
-  sourceType: 'sheet' | 'transformation' | 'project' | 'join'
+  sourceType: 'sheet' | 'transformation' | 'project' | 'join' | 'qualitative'
   sourceName: string
   transformationStep?: string
 }
@@ -16,7 +16,7 @@ interface DataViewerProps {
 interface DataResponse {
   columns: string[]
   data: (string | number | null)[][]
-  total_rows: number
+  total_rows?: number
   table_name?: string
 }
 
@@ -45,15 +45,21 @@ export default function DataViewer({
 
   useEffect(() => {
     if (data?.data) {
+      // Ensure data.data is an array of arrays
+      const dataArray = Array.isArray(data.data) ? data.data : []
+      
+      // Validate that each row is an array
+      const validatedData = dataArray.filter(row => Array.isArray(row))
+      
       if (searchTerm.trim()) {
-        const filtered = data.data.filter(row => 
+        const filtered = validatedData.filter(row => 
           row.some(cell => 
             cell?.toString().toLowerCase().includes(searchTerm.toLowerCase())
           )
         )
         setFilteredData(filtered)
       } else {
-        setFilteredData(data.data)
+        setFilteredData(validatedData)
       }
       setCurrentPage(1)
     }
@@ -92,6 +98,18 @@ export default function DataViewer({
             throw new Error('Cannot determine project ID for join data')
           }
           break
+        case 'qualitative':
+          const qualitativeId = sourceId.replace('qualitative-', '')
+          // Get the project ID from the URL for qualitative data
+          const currentUrlQual = window.location.pathname
+          const projectIdMatchQual = currentUrlQual.match(/\/transform\/(\d+)\/canvas/)
+          if (projectIdMatchQual) {
+            const currentProjectId = projectIdMatchQual[1]
+            url = getApiUrl(`/projects/${currentProjectId}/qualitative-data/${qualitativeId}/data`)
+          } else {
+            throw new Error('Cannot determine project ID for qualitative data')
+          }
+          break
         default:
           throw new Error('Unknown source type')
       }
@@ -102,6 +120,19 @@ export default function DataViewer({
       }
 
       const result = await response.json()
+      
+      // Debug logging for qualitative data
+      if (sourceType === 'qualitative') {
+        console.log('DataViewer qualitative data response:', result)
+        console.log('Data structure:', {
+          hasData: !!result.data,
+          dataType: typeof result.data,
+          isArray: Array.isArray(result.data),
+          firstRow: result.data?.[0],
+          firstRowType: typeof result.data?.[0]
+        })
+      }
+      
       setData(result)
     } catch (err) {
       console.error('Error fetching data:', err)
@@ -121,6 +152,8 @@ export default function DataViewer({
         return <Database size={16} className="text-purple-600" />
       case 'join':
         return <Database size={16} className="text-purple-600" />
+      case 'qualitative':
+        return <Brain size={16} className="text-indigo-600" />
       default:
         return <Eye size={16} className="text-gray-600" />
     }
@@ -131,11 +164,13 @@ export default function DataViewer({
       case 'sheet':
         return 'Original Sheet'
       case 'transformation':
-        return 'AI Transformation'
+        return 'Transformation'
       case 'project':
         return 'Project Data'
       case 'join':
         return 'Join Result'
+      case 'qualitative':
+        return 'Qualitative Analysis'
       default:
         return 'Data Source'
     }
@@ -246,7 +281,7 @@ export default function DataViewer({
             </div>
             <div className="flex items-center gap-4 text-sm text-gray-600">
               <span>
-                {filteredData.length.toLocaleString()} of {data.total_rows.toLocaleString()} rows
+                {filteredData.length.toLocaleString()} of {(data.total_rows || filteredData.length).toLocaleString()} rows
               </span>
               <span>
                 {data.columns.length} columns
@@ -299,26 +334,43 @@ export default function DataViewer({
                     </tr>
                   </thead>
                   <tbody>
-                    {currentData.map((row, rowIndex) => (
-                      <tr key={rowIndex} className="hover:bg-gray-50 border-b border-gray-100">
-                        <td className="px-3 py-2 text-xs text-gray-500 border-r border-gray-200">
-                          {startIndex + rowIndex + 1}
-                        </td>
-                        {row.map((cell, cellIndex) => (
-                          <td
-                            key={cellIndex}
-                            className="px-4 py-2 text-sm text-gray-900 border-r border-gray-100 max-w-64"
-                            title={cell?.toString() || ''}
-                          >
-                            <div className="truncate">
-                              {cell !== null && cell !== undefined ? cell.toString() : (
-                                <span className="text-gray-400 italic">null</span>
-                              )}
-                            </div>
+                    {currentData.map((row, rowIndex) => {
+                      // Safety check for row structure
+                      if (!Array.isArray(row)) {
+                        console.error('DataViewer: Row is not an array:', row, 'Type:', typeof row)
+                        return (
+                          <tr key={rowIndex} className="hover:bg-gray-50 border-b border-gray-100">
+                            <td className="px-3 py-2 text-xs text-gray-500 border-r border-gray-200">
+                              {startIndex + rowIndex + 1}
+                            </td>
+                            <td className="px-4 py-2 text-sm text-red-600" colSpan={data?.columns.length || 1}>
+                              Error: Invalid row data format
+                            </td>
+                          </tr>
+                        )
+                      }
+                      
+                      return (
+                        <tr key={rowIndex} className="hover:bg-gray-50 border-b border-gray-100">
+                          <td className="px-3 py-2 text-xs text-gray-500 border-r border-gray-200">
+                            {startIndex + rowIndex + 1}
                           </td>
-                        ))}
-                      </tr>
-                    ))}
+                          {row.map((cell, cellIndex) => (
+                            <td
+                              key={cellIndex}
+                              className="px-4 py-2 text-sm text-gray-900 border-r border-gray-100 max-w-64"
+                              title={cell?.toString() || ''}
+                            >
+                              <div className="truncate">
+                                {cell !== null && cell !== undefined ? cell.toString() : (
+                                  <span className="text-gray-400 italic">null</span>
+                                )}
+                              </div>
+                            </td>
+                          ))}
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
