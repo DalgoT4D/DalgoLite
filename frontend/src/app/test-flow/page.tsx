@@ -215,7 +215,7 @@ export default function TestFlowPage() {
               Landing Page (/)
             </button>
             <button
-              onClick={() => router.push('/onboarding')}
+              onClick={() => router.push('/onboarding/onboarding_1')}
               className="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-medium transition-colors"
             >
               Onboarding
