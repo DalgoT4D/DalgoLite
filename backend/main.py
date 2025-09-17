@@ -302,7 +302,7 @@ async def auth_callback(code: str, state: str = None, db: Session = Depends(get_
 
         # Redirect based on onboarding status
         if not user.onboarding_completed:
-            return RedirectResponse(url=f"{FRONTEND_URL}/onboarding?user_id={user.id}")
+            return RedirectResponse(url=f"{FRONTEND_URL}/onboarding/onboarding_1?user_id={user.id}")
         else:
             return RedirectResponse(url=f"{FRONTEND_URL}/home?user_id={user.id}")
 

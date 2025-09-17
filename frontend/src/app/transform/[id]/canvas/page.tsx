@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useRouter, useParams } from 'next/navigation'
-import { ArrowLeft, Save, Play, Settings, AlertCircle, Clock, X } from 'lucide-react'
+import { useRouter, useParams, useSearchParams } from 'next/navigation'
+import { ArrowLeft, Save, Play, Settings, AlertCircle, Clock, X, CheckCircle } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import DashboardLayout from '@/components/DashboardLayout'
 import TransformCanvas from '@/components/TransformCanvas'
@@ -51,7 +51,9 @@ export default function ProjectCanvasPage() {
   const { isAuthenticated, logout } = useAuth()
   const router = useRouter()
   const params = useParams()
+  const searchParams = useSearchParams()
   const projectId = parseInt(params.id as string)
+  const isFromOnboarding = searchParams.get('from') === 'onboarding'
 
   const [project, setProject] = useState<TransformationProject | null>(null)
   const [sheets, setSheets] = useState<ConnectedSheet[]>([])
@@ -283,10 +285,10 @@ export default function ProjectCanvasPage() {
             </div>
             <p className="text-gray-600 mb-4">{error}</p>
             <button
-              onClick={() => router.push('/home')}
+              onClick={() => router.push(isFromOnboarding ? '/onboarding/onboarding_2' : '/home')}
               className="bg-blue-600 text-white px-4 py-2 rounded-lg"
             >
-              Back to Dashboard
+              {isFromOnboarding ? 'Back to Onboarding' : 'Back to Dashboard'}
             </button>
           </div>
         </div>
@@ -302,11 +304,11 @@ export default function ProjectCanvasPage() {
           <div className="flex items-center justify-between py-4">
             <div className="flex items-center gap-4">
               <button
-                onClick={() => router.push('/home')}
+                onClick={() => router.push(isFromOnboarding ? '/onboarding/onboarding_2' : '/home')}
                 className="flex items-center gap-2 text-gray-600 hover:text-gray-900 font-medium"
               >
-                <ArrowLeft size={20} />
-                Back to Dashboard
+                {isFromOnboarding ? <CheckCircle size={20} /> : <ArrowLeft size={20} />}
+                {isFromOnboarding ? 'Finish' : 'Back to Dashboard'}
               </button>
               <div className="h-6 w-px bg-gray-300"></div>
               <div>
