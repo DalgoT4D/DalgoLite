@@ -26,6 +26,7 @@ import DataViewer from './DataViewer'
 import ContextMenu from './ContextMenu'
 import JoinModal from './JoinModal'
 import QualitativeDataModal from './QualitativeDataModal'
+import DataSourceDropdown from './DataSourceDropdown'
 import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
 
 // Type definitions
@@ -147,7 +148,7 @@ export default function TransformCanvas({
   const [newStepName, setNewStepName] = useState('')
   const [newStepPrompt, setNewStepPrompt] = useState('')
   const [newOutputTableName, setNewOutputTableName] = useState('')
-  const [selectedUpstreamNodes, setSelectedUpstreamNodes] = useState<string[]>([])
+  const [selectedDataSourceIds, setSelectedDataSourceIds] = useState<number[]>([])
   const [isExecutingAll, setIsExecutingAll] = useState(false)
   const [isCreatingTransformation, setIsCreatingTransformation] = useState(false)
   const [isCreatingStep, setIsCreatingStep] = useState(false)
@@ -817,23 +818,29 @@ export default function TransformCanvas({
   }, [])
 
   const handleCreateStep = async () => {
-    if (!newStepName.trim() || !newStepPrompt.trim() || isCreatingStep) return
+    if (!newStepName.trim() || !newStepPrompt.trim() || selectedDataSourceIds.length === 0 || isCreatingStep) return
 
     setIsCreatingStep(true)
     try {
-      // Parse selected upstream nodes into sheet IDs and step IDs
+      // Parse selected data sources into sheet IDs and step IDs based on availableTables
       const upstream_sheet_ids: number[] = []
       const upstream_step_ids: number[] = []
 
-      selectedUpstreamNodes.forEach(nodeId => {
-        if (nodeId.startsWith('sheet-')) {
-          upstream_sheet_ids.push(parseInt(nodeId.replace('sheet-', '')))
-        } else if (nodeId.startsWith('step-')) {
-          upstream_step_ids.push(parseInt(nodeId.replace('step-', '')))
-        } else if (nodeId.startsWith('join-')) {
-          // For joins, we might need to handle them differently in the backend
-          // For now, we'll treat them similar to transformation steps
-          upstream_step_ids.push(parseInt(nodeId.replace('join-', '')))
+      selectedDataSourceIds.forEach(tableId => {
+        const table = availableTables.find(t => t.id === tableId)
+        if (table) {
+          if (table.type === 'sheet') {
+            upstream_sheet_ids.push(table.id)
+          } else if (table.type === 'transformation') {
+            // Remove offset that was added to transformation IDs
+            upstream_step_ids.push(table.id - 10000)
+          } else if (table.type === 'join') {
+            // Remove offset that was added to join IDs
+            upstream_step_ids.push(table.id - 20000)
+          } else if (table.type === 'qualitative') {
+            // Remove offset that was added to qualitative IDs
+            upstream_step_ids.push(table.id - 30000)
+          }
         }
       })
 
@@ -859,7 +866,7 @@ export default function TransformCanvas({
       setNewStepName('')
       setNewStepPrompt('')
       setNewOutputTableName('')
-      setSelectedUpstreamNodes([])
+      setSelectedDataSourceIds([])
 
       // Auto-execute the newly created transformation step after modal closes
       setTimeout(async () => {
@@ -2103,88 +2110,19 @@ export default function TransformCanvas({
                 </p>
               </div>
 
-              {/* Upstream Node Selection */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Data Source <span className="text-red-500">*</span>
-                </label>
-                <p className="text-sm text-gray-600 mb-3">
-                  Select which data source(s) this transformation should operate on:
-                </p>
-                <div className="space-y-2 max-h-40 overflow-y-auto border border-gray-200 rounded-lg p-3">
-                  {/* Sheet Nodes */}
-                  {sheets.map((sheet) => (
-                    <label key={`sheet-${sheet.id}`} className="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedUpstreamNodes.includes(`sheet-${sheet.id}`)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedUpstreamNodes(prev => [...prev, `sheet-${sheet.id}`])
-                          } else {
-                            setSelectedUpstreamNodes(prev => prev.filter(id => id !== `sheet-${sheet.id}`))
-                          }
-                        }}
-                        className="mr-3 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                      />
-                      <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 bg-blue-600 rounded"></div>
-                        <span className="font-medium text-gray-900">{sheet.title}</span>
-                        <span className="text-sm text-gray-500">(Original Sheet)</span>
-                      </div>
-                    </label>
-                  ))}
-
-                  {/* Transformation Step Nodes */}
-                  {transformationSteps.filter(step => step.status === 'completed').map((step) => (
-                    <label key={`step-${step.id}`} className="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedUpstreamNodes.includes(`step-${step.id}`)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedUpstreamNodes(prev => [...prev, `step-${step.id}`])
-                          } else {
-                            setSelectedUpstreamNodes(prev => prev.filter(id => id !== `step-${step.id}`))
-                          }
-                        }}
-                        className="mr-3 h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded"
-                      />
-                      <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 bg-green-600 rounded"></div>
-                        <span className="font-medium text-gray-900">{step.step_name}</span>
-                        <span className="text-sm text-gray-500">(Transformation Output)</span>
-                      </div>
-                    </label>
-                  ))}
-
-                  {/* Join Nodes */}
-                  {joins.filter(join => join.status === 'completed').map((join) => (
-                    <label key={`join-${join.id}`} className="flex items-center p-2 hover:bg-gray-50 rounded cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedUpstreamNodes.includes(`join-${join.id}`)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedUpstreamNodes(prev => [...prev, `join-${join.id}`])
-                          } else {
-                            setSelectedUpstreamNodes(prev => prev.filter(id => id !== `join-${join.id}`))
-                          }
-                        }}
-                        className="mr-3 h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
-                      />
-                      <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 bg-purple-600 rounded"></div>
-                        <span className="font-medium text-gray-900">{join.output_table_name || join.name}</span>
-                        <span className="text-sm text-gray-500">(Join Output)</span>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-                {selectedUpstreamNodes.length === 0 && (
-                  <p className="text-sm text-red-600 mt-1">Please select at least one data source</p>
-                )}
-              </div>
+              {/* Data Source Selection */}
+              <DataSourceDropdown
+                availableTables={availableTables}
+                selectedTableIds={selectedDataSourceIds}
+                onSelectionChange={setSelectedDataSourceIds}
+                multiple={true}
+                placeholder="Select data sources..."
+                label="Data Source"
+                required={true}
+              />
+              {selectedDataSourceIds.length === 0 && (
+                <p className="text-sm text-red-600 mt-1">Please select at least one data source</p>
+              )}
 
               <div className="text-xs text-gray-500 bg-gray-50 p-3 rounded">
                 <strong>Tips:</strong>
@@ -2204,7 +2142,7 @@ export default function TransformCanvas({
                   setNewStepName('')
                   setNewStepPrompt('')
                   setNewOutputTableName('')
-                  setSelectedUpstreamNodes([])
+                  setSelectedDataSourceIds([])
                   setIsCreatingStep(false)
                 }}
                 className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium transition-colors"
@@ -2213,7 +2151,7 @@ export default function TransformCanvas({
               </button>
               <button
                 onClick={handleCreateStep}
-                disabled={!newStepName.trim() || !newStepPrompt.trim() || selectedUpstreamNodes.length === 0 || isCreatingStep}
+                disabled={!newStepName.trim() || !newStepPrompt.trim() || selectedDataSourceIds.length === 0 || isCreatingStep}
                 className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors flex items-center gap-2"
               >
                 {isCreatingStep && <Loader2 size={16} className="animate-spin" />}

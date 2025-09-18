@@ -72,8 +72,6 @@ export default function Dashboard() {
         await fetchConnectedSheets()
         // Clear the input
         setNewSheetUrl('')
-        // Redirect to charts page for the new sheet
-        router.push(`/charts?sheet=${result.sheet_id}`)
       } else {
         const error = await response.json()
         let errorMessage = error.detail || 'Unknown error occurred'

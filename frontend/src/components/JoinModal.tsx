@@ -3,11 +3,13 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { X, Database, Link, AlertTriangle, Loader2 } from 'lucide-react'
 import { getApiUrl, API_ENDPOINTS } from '@/lib/config'
+import DataSourceDropdown from './DataSourceDropdown'
 
 interface Table {
   id: number
   name: string
   columns: string[]
+  type: 'sheet' | 'transformation' | 'join' | 'qualitative'
 }
 
 interface JoinModalProps {
@@ -499,43 +501,25 @@ export default function JoinModal({
 
           {/* Table Selection */}
           <div className="grid md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Left Table *
-              </label>
-              <select
-                value={leftTable || ''}
-                onChange={(e) => setLeftTable(Number(e.target.value) || null)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                required
-              >
-                <option value="">Select left table</option>
-                {availableTables.map(table => (
-                  <option key={table.id} value={table.id}>
-                    {table.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <DataSourceDropdown
+              availableTables={availableTables}
+              selectedTableIds={leftTable ? [leftTable] : []}
+              onSelectionChange={(ids) => setLeftTable(ids.length > 0 ? ids[0] : null)}
+              multiple={false}
+              placeholder="Select left table..."
+              label="Left Table"
+              required={true}
+            />
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Right Table *
-              </label>
-              <select
-                value={rightTable || ''}
-                onChange={(e) => setRightTable(Number(e.target.value) || null)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                required
-              >
-                <option value="">Select right table</option>
-                {availableTables.map(table => (
-                  <option key={table.id} value={table.id}>
-                    {table.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <DataSourceDropdown
+              availableTables={availableTables}
+              selectedTableIds={rightTable ? [rightTable] : []}
+              onSelectionChange={(ids) => setRightTable(ids.length > 0 ? ids[0] : null)}
+              multiple={false}
+              placeholder="Select right table..."
+              label="Right Table"
+              required={true}
+            />
           </div>
 
           {/* Join Type */}
