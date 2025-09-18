@@ -64,7 +64,7 @@ export default function LandingPage() {
         <nav className="relative z-10 bg-white/80 backdrop-blur-md border-b border-white/20">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex justify-between items-center py-4">
-              <Logo size="lg" />
+              <Logo size="sm" />
               <div className="flex items-center gap-4">
                 {isAuthenticated ? (
                   <div className="flex items-center gap-4">

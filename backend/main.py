@@ -169,6 +169,10 @@ class TransformationStepUpdateRequest(BaseModel):
     step_name: Optional[str] = None
     user_prompt: Optional[str] = None
     output_table_name: Optional[str] = None
+    upstream_step_ids: Optional[List[int]] = None
+    upstream_sheet_ids: Optional[List[int]] = None
+    upstream_tables: Optional[List[Dict[str, Any]]] = None
+    canvas_position: Optional[Dict[str, float]] = None
 
 class QualitativeDataCreateRequest(BaseModel):
     project_id: int
