@@ -471,6 +471,7 @@ export default function TransformCanvas({
                       
                       if (deleteResponse.ok) {
                         setNodes(nodes => nodes.filter(node => node.id !== `join-${joinId}`))
+                        setJoins(joins => joins.filter(join => join.id !== joinId))
                         setHasUnsavedChanges(true)
                       } else {
                         alert('Failed to delete join. Please try again.')
@@ -641,6 +642,7 @@ export default function TransformCanvas({
                   
                   if (deleteResponse.ok) {
                     setNodes(nodes => nodes.filter(node => node.id !== `qualitative-${operationId}`))
+                    setQualitativeDataOperations(operations => operations.filter(op => op.id !== operationId))
                     setHasUnsavedChanges(true)
                   } else {
                     alert('Failed to delete qualitative analysis. Please try again.')
@@ -849,12 +851,64 @@ export default function TransformCanvas({
         await onTransformationCreated()
       }
 
-      // Reset modal
+      // Store step name before clearing for auto-execution
+      const createdStepName = newStepName
+
+      // Reset modal first - let the node show on canvas
       setShowCreateModal(false)
       setNewStepName('')
       setNewStepPrompt('')
       setNewOutputTableName('')
       setSelectedUpstreamNodes([])
+
+      // Auto-execute the newly created transformation step after modal closes
+      setTimeout(async () => {
+        try {
+          console.log('🚀 Auto-executing newly created transformation step...')
+          
+          // Get the latest transformation steps to find the newly created one
+          const response = await fetch(getApiUrl(`/projects/${projectId}/ai-transformations`))
+          if (response.ok) {
+            const stepsData = await response.json()
+            console.log('Available steps:', stepsData.steps?.map((s: any) => ({ id: s.id, name: s.step_name, status: s.status })))
+            
+            // Look for the step with matching name (regardless of status)
+            const newStep = stepsData.steps.find((step: any) => 
+              step.step_name === createdStepName
+            )
+            
+            console.log('Found step for auto-execution:', newStep)
+            
+            if (newStep) {
+              // Execute the step directly (like onExecuteStep does)
+              const executeResponse = await fetch(getApiUrl(`/ai-transformations/${newStep.id}/execute`), {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+              })
+
+              if (!executeResponse.ok) {
+                const errorData = await executeResponse.json()
+                console.error('Execution failed:', errorData)
+                throw new Error(errorData.detail || 'Failed to execute transformation step')
+              }
+
+              console.log('✅ Auto-execution completed for step:', newStep.id)
+              
+              // Refresh transformation steps to get updated data (table names, status, etc.)
+              if (onTransformationCreated) {
+                await onTransformationCreated()
+              }
+            } else {
+              console.log('No matching step found for:', createdStepName)
+            }
+          }
+        } catch (error) {
+          console.error('Auto-execution failed:', error)
+          // Don't block the creation process if auto-execution fails
+        }
+      }, 1000) // Increase delay to ensure step is fully created
     } catch (error) {
       console.error('Failed to create transformation step:', error)
     } finally {
@@ -1293,6 +1347,7 @@ export default function TransformCanvas({
                 
                 if (deleteResponse.ok) {
                   setNodes(nodes => nodes.filter(node => node.id !== `join-${joinId}`))
+                  setJoins(joins => joins.filter(join => join.id !== joinId))
                   setHasUnsavedChanges(true)
                 } else {
                   alert('Failed to delete join. Please try again.')
@@ -1399,6 +1454,43 @@ export default function TransformCanvas({
       if (onJoinCreated) {
         await onJoinCreated()
       }
+
+      // Auto-execute the newly created join after a brief delay to let UI update
+      setTimeout(async () => {
+        try {
+          console.log('🚀 Auto-executing newly created join...')
+          
+          const executeResponse = await fetch(getApiUrl(`/projects/${projectId}/joins/${result.join_id}/execute`), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          })
+          
+          if (executeResponse.ok) {
+            console.log('✅ Auto-execution completed for join:', result.join_id)
+            
+            // Refresh joins to get updated data (table names, status, execution info, etc.)
+            if (onJoinCreated) {
+              await onJoinCreated()
+            }
+          } else {
+            console.error('Join auto-execution failed:', executeResponse.status)
+            
+            // Still refresh to get the failed status
+            if (onJoinCreated) {
+              await onJoinCreated()
+            }
+          }
+        } catch (error) {
+          console.error('Auto-execution failed:', error)
+          
+          // Still refresh to get the failed status
+          if (onJoinCreated) {
+            await onJoinCreated()
+          }
+        }
+      }, 500) // Small delay to ensure UI updates
       
     } catch (error) {
       console.error('Error creating join:', error)
@@ -1417,11 +1509,13 @@ export default function TransformCanvas({
     source_table_id: number
     source_table_type: 'sheet' | 'transformation' | 'join' | 'qualitative'
     qualitative_column: string
-    analysis_type: 'sentiment' | 'summarization'
+    analysis_type: 'sentiment' | 'summarization' | 'theme_extraction'
     aggregation_column?: string
     summarize_sentiment_analysis?: boolean
     sentiment_column?: string
     output_table_name?: string
+    theme_extraction_mode?: 'themes_to_rows' | 'reviews_to_themes'
+    multi_theme_mode?: 'single' | 'multi'
   }) => {
     try {
       // Create qualitative data operation via backend API
@@ -1505,6 +1599,7 @@ export default function TransformCanvas({
                 
                 if (deleteResponse.ok) {
                   setNodes(nodes => nodes.filter(node => node.id !== `qualitative-${operationId}`))
+                  setQualitativeDataOperations(operations => operations.filter(op => op.id !== operationId))
                   setHasUnsavedChanges(true)
                 } else {
                   alert('Failed to delete qualitative analysis. Please try again.')
@@ -1623,6 +1718,44 @@ export default function TransformCanvas({
       if (onQualitativeDataCreated) {
         await onQualitativeDataCreated()
       }
+
+      // Auto-execute the newly created qualitative data operation after a brief delay
+      setTimeout(async () => {
+        try {
+          console.log('🚀 Auto-executing newly created qualitative operation...')
+          
+          const executeResponse = await fetch(getApiUrl(`/projects/${projectId}/qualitative-data/${result.operation_id}/execute`), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          })
+          
+          if (executeResponse.ok) {
+            const executeResult = await executeResponse.json()
+            console.log('✅ Auto-execution completed for qualitative operation:', result.operation_id)
+            
+            // Refresh qualitative data operations to get updated data (table names, status, execution info, etc.)
+            if (onQualitativeDataCreated) {
+              await onQualitativeDataCreated()
+            }
+          } else {
+            console.error('Qualitative operation auto-execution failed:', executeResponse.status)
+            
+            // Still refresh to get the failed status and any partial results
+            if (onQualitativeDataCreated) {
+              await onQualitativeDataCreated()
+            }
+          }
+        } catch (error) {
+          console.error('Auto-execution failed:', error)
+          
+          // Still refresh to get the failed status
+          if (onQualitativeDataCreated) {
+            await onQualitativeDataCreated()
+          }
+        }
+      }, 500) // Small delay to ensure UI updates
       
     } catch (error) {
       console.error('Error creating qualitative data operation:', error)
@@ -1640,11 +1773,13 @@ export default function TransformCanvas({
     source_table_id: number
     source_table_type: 'sheet' | 'transformation' | 'join' | 'qualitative'
     qualitative_column: string
-    analysis_type: 'sentiment' | 'summarization'
+    analysis_type: 'sentiment' | 'summarization' | 'theme_extraction'
     aggregation_column?: string
     summarize_sentiment_analysis?: boolean
     sentiment_column?: string
     output_table_name?: string
+    theme_extraction_mode?: 'themes_to_rows' | 'reviews_to_themes'
+    multi_theme_mode?: 'single' | 'multi'
   }) => {
     if (!editingQualitativeOperation) return
 

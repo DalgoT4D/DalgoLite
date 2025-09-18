@@ -282,6 +282,19 @@ export default function ProjectCanvasPage() {
     }
   }
 
+  const handleJoinCreated = async () => {
+    try {
+      // Refresh joins
+      const joinsResponse = await fetch(getApiUrl(`/projects/${projectId}/joins`))
+      if (joinsResponse.ok) {
+        const joinsData = await joinsResponse.json()
+        setJoins(joinsData.joins || [])
+      }
+    } catch (err) {
+      console.error('Error refreshing joins:', err)
+    }
+  }
+
   const handleQualitativeDataCreated = async () => {
     try {
       // Refresh qualitative data operations
@@ -387,6 +400,7 @@ export default function ProjectCanvasPage() {
             onExecuteAll={handleExecuteAll}
             onDeleteTransformationStep={handleDeleteTransformationStep}
             onTransformationCreated={handleTransformationCreated}
+            onJoinCreated={handleJoinCreated}
             onQualitativeDataCreated={handleQualitativeDataCreated}
           />
         </div>

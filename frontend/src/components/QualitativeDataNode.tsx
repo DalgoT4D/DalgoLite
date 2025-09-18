@@ -12,7 +12,7 @@ interface QualitativeDataNodeData {
     source_table_id: number
     source_table_type: string
     qualitative_column: string
-    analysis_type: string // 'sentiment' or 'summarization'
+    analysis_type: string // 'sentiment', 'summarization', or 'theme_extraction'
     aggregation_column?: string
     summarize_sentiment_analysis?: boolean
     sentiment_column?: string
@@ -89,6 +89,8 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
         return 'Sentiment Analysis'
       case 'summarization':
         return 'Summarization'
+      case 'theme_extraction':
+        return 'Theme Extraction'
       default:
         return 'Qualitative Analysis'
     }

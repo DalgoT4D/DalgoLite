@@ -694,9 +694,16 @@ export default function UnifiedChartsPage() {
                       >
                         <div className="flex justify-between items-start mb-6">
                           <div className="flex-1 min-w-0">
-                            <h4 className="text-lg font-semibold text-gray-900 mb-2 truncate">{chart.chart_name}</h4>
+                            <div className="flex items-center gap-2 mb-2">
+                              <h4 className="text-lg font-semibold text-gray-900 truncate">{chart.chart_name}</h4>
+                              {isQualitativeCards && (
+                                <span className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full font-medium">
+                                  Interactive
+                                </span>
+                              )}
+                            </div>
                             <p className="text-sm text-gray-600 mb-1 truncate">{chart.source_name}</p>
-                            <p className="text-sm text-gray-500 capitalize font-medium">{chart.chart_type} chart</p>
+                            <p className="text-sm text-gray-500 capitalize font-medium">{chart.chart_type.replace('_', ' ')} chart</p>
                           </div>
                           <div className="flex items-center gap-2 ml-4">
                             <button
@@ -714,19 +721,22 @@ export default function UnifiedChartsPage() {
                           </div>
                         </div>
                         
-                        <div className={`bg-gradient-to-br from-gray-50 to-gray-100/50 rounded-xl p-4 relative group ${
+                        <div className={`bg-gradient-to-br from-gray-50 to-gray-100/50 rounded-xl p-4 relative ${isQualitativeCards ? '' : 'group'} ${
                           isQualitativeCards ? 'h-96' : 'h-64'
                         }`}>
                           <ChartDisplay chartId={chart.id} />
-                          <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-opacity rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100">
-                            <button
-                              onClick={() => router.push(`/charts/${chart.id}/view?from=charts`)}
-                              className="bg-white hover:bg-gray-100 text-gray-900 px-6 py-3 rounded-xl shadow-lg flex items-center gap-3 transition-colors font-semibold"
-                            >
-                              <Eye size={18} />
-                              View Larger
-                            </button>
-                          </div>
+                          {/* Only show overlay for non-qualitative cards */}
+                          {!isQualitativeCards && (
+                            <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-opacity rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100">
+                              <button
+                                onClick={() => router.push(`/charts/${chart.id}/view?from=charts`)}
+                                className="bg-white hover:bg-gray-100 text-gray-900 px-6 py-3 rounded-xl shadow-lg flex items-center gap-3 transition-colors font-semibold"
+                              >
+                                <Eye size={18} />
+                                View Larger
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     )

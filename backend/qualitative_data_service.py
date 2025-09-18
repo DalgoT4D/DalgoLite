@@ -145,7 +145,7 @@ class QualitativeDataService:
         analysis_type: str,
         aggregation_column: Optional[str] = None,
         summarize_sentiment_analysis: bool = False,
-        sentiment_column: Optional[str] = None
+        sentiment_column: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Analyze qualitative data using OpenAI
@@ -381,9 +381,18 @@ class QualitativeDataService:
             }
         
         else:
-            # Standard analysis without grouping
+            # Standard analysis without grouping - use hierarchical summarization for large datasets
             print("📝 Generating overall summary (corpus-wide analysis)...")
-            overall_obj = self.call_llm_json_list(texts, system_qa, prompt_summary)
+            
+            # Implement hierarchical summarization for large datasets
+            if len(texts) > self.batch_size:
+                print(f"📝 Large dataset detected ({len(texts)} items). Using hierarchical summarization...")
+                overall_obj = self._hierarchical_summarization(texts, system_qa, prompt_summary)
+                batch_count = len(texts) // self.batch_size + (1 if len(texts) % self.batch_size > 0 else 0)
+            else:
+                print(f"📝 Small dataset ({len(texts)} items). Using single-pass summarization...")
+                overall_obj = self.call_llm_json_list(texts, system_qa, prompt_summary)
+                batch_count = 1
             
             overall_summary_text = overall_obj.get("overall_summary", "")
             bullet_highlights = overall_obj.get("bullet_highlights", [])
@@ -411,7 +420,7 @@ class QualitativeDataService:
                 "output_data": summary_df,
                 "analysis_type": "summarization", 
                 "total_records": len(texts),
-                "batch_count": 1,  # Summarization is done as one batch to ensure overall analysis
+                "batch_count": batch_count,
                 "summary_details": {
                     "overall_summary": overall_summary_text,
                     "bullet_highlights": bullet_highlights,
@@ -419,6 +428,136 @@ class QualitativeDataService:
                     "method_note": method_note
                 }
             }
+
+    def _hierarchical_summarization(self, texts: List[str], system_qa: str, prompt_summary: str) -> Dict[str, Any]:
+        """
+        Perform hierarchical summarization for large datasets:
+        1. Split into batches
+        2. Summarize each batch 
+        3. Combine batch summaries into final summary
+        """
+        print(f"🔄 Starting hierarchical summarization for {len(texts)} items...")
+        
+        # Step 1: Split into batches and get batch summaries
+        chunks = [texts[i:i+self.batch_size] for i in range(0, len(texts), self.batch_size)]
+        print(f"🔄 Created {len(chunks)} batches of ~{self.batch_size} items each")
+        
+        batch_summaries = []
+        
+        # Create modified prompt for batch-level summarization
+        batch_prompt = (
+            "You are given a JSON array of feedback texts from respondents. "
+            "Write ONE thorough synthesis of this batch. This will be combined with other batch summaries later. "
+            "Use neutral, NGO-friendly language.\n\n"
+            "Return ONLY valid JSON with this schema. No other text:\n"
+            "{\n"
+            '  "overall_summary": "<2-3 paragraphs synthesizing this batch: main themes, tone, key points>",\n'
+            '  "bullet_highlights": ["4-6 key takeaways from this batch"],\n'
+            '  "suggested_actions": ["3-5 specific actions based on this batch"],\n'
+            '  "method_note": "Brief note on this batch characteristics."\n'
+            "}\n\n"
+            "Guidelines:\n"
+            "- Focus on the most important themes in this batch.\n"
+            "- Be concise but comprehensive.\n"
+            "- Avoid copying long quotes; paraphrase.\n\n"
+            "Response format: Start your response directly with { and end with }"
+        )
+        
+        # Process each batch
+        for i, chunk in enumerate(chunks):
+            print(f"🔄 Processing batch {i+1}/{len(chunks)} ({len(chunk)} items)...")
+            try:
+                batch_result = self.call_llm_json_list(chunk, system_qa, batch_prompt)
+                batch_summaries.append({
+                    'batch_id': i + 1,
+                    'item_count': len(chunk),
+                    'summary': batch_result
+                })
+            except Exception as e:
+                print(f"⚠️ Warning: Batch {i+1} failed with error: {str(e)}. Skipping...")
+                continue
+        
+        print(f"🔄 Successfully processed {len(batch_summaries)} out of {len(chunks)} batches")
+        
+        # Step 2: Combine batch summaries into final summary
+        if not batch_summaries:
+            # Fallback if all batches failed
+            print("⚠️ All batches failed. Using fallback summary...")
+            return {
+                "overall_summary": "Unable to generate comprehensive summary due to processing errors.",
+                "bullet_highlights": ["Data processing encountered technical difficulties"],
+                "suggested_actions": ["Review data quality and retry analysis"],
+                "method_note": "Summary generation failed due to technical issues."
+            }
+        
+        # Create meta-summary prompt
+        meta_prompt = (
+            "You are given a JSON array of batch summaries from a large dataset analysis. "
+            "Each batch summary represents insights from a portion of the full dataset. "
+            "Synthesize ALL batch summaries into ONE comprehensive final summary.\n\n"
+            "Return ONLY valid JSON with this schema. No other text:\n"
+            "{\n"
+            '  "overall_summary": "<3-6 paragraphs synthesizing across ALL batches: overall patterns, main themes, key insights, notable variations>",\n'
+            '  "bullet_highlights": ["6-10 most important takeaways from the complete dataset"],\n'
+            '  "suggested_actions": ["6-10 specific, actionable next steps based on full analysis"],\n'
+            '  "method_note": "Note on methodology and limitations of hierarchical analysis."\n'
+            "}\n\n"
+            "Guidelines:\n"
+            "- Look for patterns ACROSS batches, not just within them.\n"
+            "- Identify consensus themes vs. divergent views.\n"
+            "- Prioritize insights that appear consistently across multiple batches.\n"
+            "- Be comprehensive but avoid redundancy.\n\n"
+            "Response format: Start your response directly with { and end with }"
+        )
+        
+        # Extract batch summaries for meta-analysis
+        batch_summary_texts = []
+        for batch_info in batch_summaries:
+            batch_data = batch_info['summary']
+            summary_text = f"Batch {batch_info['batch_id']} ({batch_info['item_count']} items): {batch_data.get('overall_summary', '')}"
+            batch_summary_texts.append(summary_text)
+        
+        print(f"🔄 Generating meta-summary from {len(batch_summary_texts)} batch summaries...")
+        
+        try:
+            # Use call_llm_json_list with the batch summaries as input
+            final_result = self.call_llm_json_list(batch_summary_texts, system_qa, meta_prompt)
+            
+            # Add methodology note about hierarchical processing
+            if 'method_note' in final_result:
+                original_note = final_result['method_note']
+                final_result['method_note'] = f"Hierarchical analysis of {len(texts)} items in {len(chunks)} batches. {original_note}"
+            
+            print(f"✅ Hierarchical summarization completed successfully!")
+            return final_result
+            
+        except Exception as e:
+            print(f"⚠️ Meta-summary generation failed: {str(e)}. Using consolidated fallback...")
+            
+            # Fallback: manually combine key points from batch summaries
+            all_highlights = []
+            all_actions = []
+            
+            for batch_info in batch_summaries:
+                batch_data = batch_info['summary']
+                if isinstance(batch_data.get('bullet_highlights'), list):
+                    all_highlights.extend(batch_data['bullet_highlights'])
+                if isinstance(batch_data.get('suggested_actions'), list):
+                    all_actions.extend(batch_data['suggested_actions'])
+            
+            return {
+                "overall_summary": f"Analysis of {len(texts)} items across {len(chunks)} batches revealed multiple themes. Due to processing limitations, detailed synthesis is unavailable, but key patterns were identified across batches.",
+                "bullet_highlights": all_highlights[:8],  # Limit to avoid overwhelming
+                "suggested_actions": all_actions[:8],
+                "method_note": f"Hierarchical analysis of {len(texts)} items in {len(chunks)} batches. Meta-summary generation encountered technical difficulties."
+            }
+
+
+
+
+
+
+
 
 
 # Global instance - initialized when needed

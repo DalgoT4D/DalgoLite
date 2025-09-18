@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useMemo } from 'react'
-import { ChevronLeft, ChevronRight, Search, X, Info } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search, X, Info, Plus, Minus } from 'lucide-react'
 
 interface QualitativeCardsChartProps {
   data: any
@@ -75,6 +75,31 @@ const QualitativeCardsChart: React.FC<QualitativeCardsChartProps> = ({
   const [currentIndex, setCurrentIndex] = useState(0)
   const [searchTerm, setSearchTerm] = useState('')
   const [showSearch, setShowSearch] = useState(false)
+  const [fontSize, setFontSize] = useState('sm') // 'xs', 'sm', 'base', 'lg', 'xl'
+
+  // Font size options
+  const fontSizes = ['xs', 'sm', 'base', 'lg', 'xl']
+  const fontSizeClasses = {
+    xs: 'text-xs',
+    sm: 'text-sm', 
+    base: 'text-base',
+    lg: 'text-lg',
+    xl: 'text-xl'
+  }
+
+  const increaseFontSize = () => {
+    const currentIndex = fontSizes.indexOf(fontSize)
+    if (currentIndex < fontSizes.length - 1) {
+      setFontSize(fontSizes[currentIndex + 1])
+    }
+  }
+
+  const decreaseFontSize = () => {
+    const currentIndex = fontSizes.indexOf(fontSize)
+    if (currentIndex > 0) {
+      setFontSize(fontSizes[currentIndex - 1])
+    }
+  }
 
   // Transform data into card format
   const { cards, duplicateValues: computedDuplicates } = useMemo(() => {
@@ -233,9 +258,29 @@ const QualitativeCardsChart: React.FC<QualitativeCardsChartProps> = ({
       tabIndex={0}
       onKeyDown={handleKeyDown}
     >
-      {/* Header with Search */}
+      {/* Header with Font Size Controls and Search */}
       <div className="flex items-center justify-between mb-3 px-2 flex-shrink-0">
         <div className="flex items-center gap-2">
+          {/* Font Size Controls */}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={decreaseFontSize}
+              disabled={fontSize === fontSizes[0]}
+              className="p-1 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed rounded transition-colors"
+              title="Decrease font size"
+            >
+              <Minus size={12} />
+            </button>
+            <button
+              onClick={increaseFontSize}
+              disabled={fontSize === fontSizes[fontSizes.length - 1]}
+              className="p-1 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed rounded transition-colors"
+              title="Increase font size"
+            >
+              <Plus size={12} />
+            </button>
+          </div>
+
           {title && (
             <h3 className="text-base font-semibold text-gray-900 truncate">{title}</h3>
           )}
@@ -289,7 +334,7 @@ const QualitativeCardsChart: React.FC<QualitativeCardsChartProps> = ({
             
             {/* Card Content */}
             <div className="flex-1 mb-3 overflow-y-auto min-h-0">
-              <p className="text-gray-700 leading-relaxed text-sm">
+              <p className={`text-gray-700 leading-relaxed ${fontSizeClasses[fontSize as keyof typeof fontSizeClasses]}`}>
                 {currentCard.content}
               </p>
             </div>

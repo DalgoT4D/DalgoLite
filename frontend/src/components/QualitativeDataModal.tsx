@@ -61,6 +61,7 @@ export default function QualitativeDataModal({
   const [outputTableName, setOutputTableName] = useState(initialOperation?.output_table_name || '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
   
   // Drag functionality
   const [isDragging, setIsDragging] = useState(false)
@@ -180,6 +181,7 @@ export default function QualitativeDataModal({
     fetchTableColumns(parsedId, type)
   }
 
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
@@ -211,6 +213,7 @@ export default function QualitativeDataModal({
       return
     }
 
+
     setLoading(true)
     try {
       const operationConfig = {
@@ -222,9 +225,10 @@ export default function QualitativeDataModal({
         aggregation_column: aggregationColumn.trim() || undefined,
         summarize_sentiment_analysis: summarizeSentimentAnalysis,
         sentiment_column: sentimentColumn.trim() || undefined,
-        output_table_name: outputTableName.trim() || undefined
+        output_table_name: outputTableName.trim() || undefined,
       }
       console.log('DEBUG: Creating qualitative operation with config:', operationConfig)
+      console.log('DEBUG: Analysis type:', analysisType)
       await onCreateOperation(operationConfig)
       
       // Reset form
@@ -409,6 +413,7 @@ export default function QualitativeDataModal({
               )}
             </div>
           )}
+
 
           {/* Sentiment Analysis Options - Only show for summarization */}
           {/* COMMENTED OUT: Remove sentiment analysis option from UI while keeping backend functionality 
