@@ -29,7 +29,7 @@ export default function LandingPage() {
     if (!isLoading && isAuthenticated && user) {
       if (!user.onboarding_completed) {
         // New user or incomplete onboarding - go to onboarding
-        router.push('/onboarding')
+        router.push('/onboarding/onboarding_1')
       } else {
         // Existing user with completed onboarding - go to home
         router.push('/home')

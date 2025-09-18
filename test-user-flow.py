@@ -89,7 +89,7 @@ def test_frontend_pages():
     print("   ✅ Test flow page loads")
 
     # Test onboarding page
-    response = requests.get(f"{FRONTEND_URL}/onboarding")
+    response = requests.get(f"{FRONTEND_URL}/onboarding/onboarding_1")
     assert response.status_code == 200
     print("   ✅ Onboarding page loads")
 
