@@ -8,10 +8,10 @@ interface LogoProps {
 
 export default function Logo({ size = 'md', compact = false, className = '' }: LogoProps) {
   const logoSizes = {
-    xs: { width: 112, height: 28 },
-    sm: { width: 168, height: 42 },
-    md: { width: 224, height: 56 },
-    lg: { width: 280, height: 70 }
+    xs: { width: 100, height: 40 },
+    sm: { width: 150, height: 60 },
+    md: { width: 200, height: 80 },
+    lg: { width: 250, height: 100 }
   }
 
   const compactSizes = {
@@ -41,7 +41,7 @@ export default function Logo({ size = 'md', compact = false, className = '' }: L
   return (
     <div className={`flex items-center ${className}`}>
       <Image
-        src="/dalgo-logo.svg"
+        src="/dalgo-logo.png"
         alt="Dalgo - A Project Tech4Dev Initiative"
         width={logoSizes[size].width}
         height={logoSizes[size].height}

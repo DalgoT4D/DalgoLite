@@ -10,8 +10,8 @@ const anekLatin = Anek_Latin({
 import { SidebarProvider } from '@/contexts/SidebarContext'
 
 export const metadata: Metadata = {
-  title: 'DalgoLite - Smart Data Analytics',
-  description: 'Connect Google Sheets and get smart chart recommendations',
+  title: 'Dalgo - Smart Data Analytics',
+  description: 'Visual data transformation and AI-powered analytics platform for survey and qualitative data - A Project Tech4Dev Initiative',
 }
 
 export default function RootLayout({
