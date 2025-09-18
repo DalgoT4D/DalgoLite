@@ -882,7 +882,7 @@ class QualitativeDataRepository:
             if output_columns:
                 qualitative_op.output_columns = output_columns
             if execution_time_ms:
-                qualitative_op.execution_time_ms = execution_time_ms
+                qualitative_op.execution_time_ms = int(execution_time_ms)
             if actual_table_name:
                 # Only set if the field exists
                 if hasattr(qualitative_op, 'actual_table_name'):
@@ -890,10 +890,10 @@ class QualitativeDataRepository:
                 else:
                     # Fallback for older database schema
                     print(f"DEBUG: actual_table_name field not available, skipping")
-            if total_records:
-                qualitative_op.total_records_processed = total_records
-            if batch_count:
-                qualitative_op.batch_count = batch_count
+            if total_records is not None:
+                qualitative_op.total_records_processed = int(total_records)
+            if batch_count is not None:
+                qualitative_op.batch_count = int(batch_count)
             qualitative_op.updated_at = datetime.now(timezone.utc)
             self.db.commit()
             self.db.refresh(qualitative_op)
