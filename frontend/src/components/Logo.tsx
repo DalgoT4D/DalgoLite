@@ -1,4 +1,4 @@
-import { BarChart3 } from 'lucide-react'
+import Image from 'next/image'
 
 interface LogoProps {
   size?: 'xs' | 'sm' | 'md' | 'lg'
@@ -7,18 +7,11 @@ interface LogoProps {
 }
 
 export default function Logo({ size = 'md', compact = false, className = '' }: LogoProps) {
-  const sizeClasses = {
-    xs: 'text-lg',
-    sm: 'text-xl',
-    md: 'text-2xl',
-    lg: 'text-3xl'
-  }
-
-  const iconSizes = {
-    xs: 'w-4 h-4',
-    sm: 'w-6 h-6',
-    md: 'w-8 h-8',
-    lg: 'w-10 h-10'
+  const logoSizes = {
+    xs: { width: 112, height: 28 },
+    sm: { width: 168, height: 42 },
+    md: { width: 224, height: 56 },
+    lg: { width: 280, height: 70 }
   }
 
   const compactSizes = {
@@ -30,7 +23,7 @@ export default function Logo({ size = 'md', compact = false, className = '' }: L
 
   const isWhiteText = className.includes('text-white')
 
-  // Compact version: Just "D" with blue underline
+  // Compact version: Just "D" with green underline (matching the logo)
   if (compact) {
     return (
       <div className={`flex items-center justify-center ${className}`}>
@@ -38,22 +31,23 @@ export default function Logo({ size = 'md', compact = false, className = '' }: L
           <span className={`font-bold ${isWhiteText ? 'text-white' : 'text-gray-800'} ${compactSizes[size]}`}>
             D
           </span>
-          <div className={`absolute -bottom-1 left-0 right-0 h-0.5 ${isWhiteText ? 'bg-blue-400' : 'bg-blue-600'} rounded-full`}></div>
+          <div className={`absolute -bottom-1 left-0 right-0 h-0.5 ${isWhiteText ? 'bg-green-400' : 'bg-green-500'} rounded-full`}></div>
         </div>
       </div>
     )
   }
 
-  // Full version: Icon + "DalgoLite" text
+  // Full version: Use the new Dalgo logo image
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
-      <div className="relative">
-        <BarChart3 className={`${iconSizes[size]} ${isWhiteText ? 'text-white' : 'text-blue-600'}`} />
-        <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-white"></div>
-      </div>
-      <span className={`font-bold ${isWhiteText ? 'text-white' : 'text-gray-800'} ${sizeClasses[size]}`}>
-        Dalgo<span className={isWhiteText ? 'text-blue-400' : 'text-blue-600'}>Lite</span>
-      </span>
+    <div className={`flex items-center ${className}`}>
+      <Image
+        src="/dalgo-logo.svg"
+        alt="Dalgo - A Project Tech4Dev Initiative"
+        width={logoSizes[size].width}
+        height={logoSizes[size].height}
+        className="object-contain"
+        priority
+      />
     </div>
   )
 }

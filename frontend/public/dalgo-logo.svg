@@ -1,0 +1,14 @@
+<svg width="280" height="70" viewBox="0 0 280 70" xmlns="http://www.w3.org/2000/svg">
+  <!-- Dalgo Text in navy blue -->
+  <text x="10" y="40" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#1e3a8a">
+    Dalgo
+  </text>
+  
+  <!-- Green underline bar -->
+  <rect x="10" y="45" width="120" height="6" fill="#059669" rx="3"/>
+  
+  <!-- Subtitle in smaller text -->
+  <text x="10" y="62" font-family="Arial, sans-serif" font-size="10" font-weight="normal" fill="#6b7280" letter-spacing="1.5">
+    A PROJECT TECH4DEV INITIATIVE
+  </text>
+</svg>
