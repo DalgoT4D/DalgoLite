@@ -445,6 +445,10 @@ def migrate_database():
                     conn.execute(text(f"ALTER TABLE qualitative_data_operations ADD COLUMN {col_name} {col_def}"))
                     conn.commit()
         print("Sentiment analysis columns migration completed successfully")
+        
+        # Refresh existing columns list after sentiment analysis migration
+        existing_columns = [col['name'] for col in inspector.get_columns('qualitative_data_operations')]
+        
 
     # Check if we need to migrate ai_transformation_steps table
     if 'ai_transformation_steps' in existing_tables:
