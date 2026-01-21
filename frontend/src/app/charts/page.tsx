@@ -151,7 +151,8 @@ const CHART_TYPES = [
   { value: 'scatter', label: 'Scatter Plot', description: 'Show relationship between two variables' },
   { value: 'histogram', label: 'Histogram', description: 'Show distribution of a single variable' },
   { value: 'table', label: 'Table', description: 'Display data in rows and columns' },
-  { value: 'qualitative_cards', label: 'Qualitative Cards', description: 'Navigate qualitative text with supporting metrics' }
+  { value: 'qualitative_cards', label: 'Qualitative Cards', description: 'Navigate qualitative text with supporting metrics' },
+  { value: 'theme_explorer', label: 'Theme Explorer', description: 'Browse themes with per-review navigation' }
 ]
 
 const AGGREGATION_TYPES = [
@@ -330,8 +331,9 @@ export default function UnifiedChartsPage() {
     if (!chartForm.chart_name.trim() || !selectedDataSource) return
 
     const isQualitativeCards = chartForm.chart_type === 'qualitative_cards'
+    const isThemeExplorer = chartForm.chart_type === 'theme_explorer'
 
-    if (!isQualitativeCards && chartForm.chart_type !== 'table' && !chartForm.x_axis_column) return
+    if (!isQualitativeCards && !isThemeExplorer && chartForm.chart_type !== 'table' && !chartForm.x_axis_column) return
 
     let activeMetrics: { column: string; label: string; formatting: string }[] = []
     if (isQualitativeCards) {
@@ -373,11 +375,19 @@ export default function UnifiedChartsPage() {
         return acc
       }, {} as Record<string, string>)
 
+      // Defaults for theme explorer columns
+      const columns = selectedDataSource.columns || []
+      const defaultThemeCol = columns.find(col => col.toLowerCase().includes('theme')) || 'identified_theme'
+      const defaultTextCol =
+        columns.find(col => col.toLowerCase().includes('text')) ||
+        columns.find(col => col.toLowerCase().includes('response')) ||
+        'original_text'
+
       const requestData = {
         chart_name: chartForm.chart_name,
         chart_type: chartForm.chart_type,
-        x_axis_column: isQualitativeCards ? qualitativeForm.unique_column : chartForm.x_axis_column,
-        y_axis_column: isQualitativeCards ? undefined : chartForm.y_axis_column || undefined,
+        x_axis_column: isQualitativeCards ? qualitativeForm.unique_column : isThemeExplorer ? '' : chartForm.x_axis_column,
+        y_axis_column: isQualitativeCards || isThemeExplorer ? undefined : chartForm.y_axis_column || undefined,
         chart_config: isQualitativeCards
           ? {
               unique_column: qualitativeForm.unique_column,
@@ -386,6 +396,11 @@ export default function UnifiedChartsPage() {
               quantitative_labels: quantitativeLabels,
               value_formatting: valueFormatting
             }
+          : isThemeExplorer
+            ? {
+                theme_column: defaultThemeCol,
+                text_column: defaultTextCol
+              }
           : {
               aggregation_type: chartForm.aggregation_type,
               selected_columns: chartForm.chart_type === 'table' ? chartForm.selected_columns : undefined
@@ -429,7 +444,8 @@ export default function UnifiedChartsPage() {
     if (!editingChart || !chartForm.chart_name.trim()) return
 
     const isQualitativeCards = chartForm.chart_type === 'qualitative_cards'
-    if (!isQualitativeCards && chartForm.chart_type !== 'table' && !chartForm.x_axis_column) return
+    const isThemeExplorer = chartForm.chart_type === 'theme_explorer'
+    if (!isQualitativeCards && !isThemeExplorer && chartForm.chart_type !== 'table' && !chartForm.x_axis_column) return
 
     let activeMetrics: { column: string; label: string; formatting: string }[] = []
     if (isQualitativeCards) {
@@ -455,13 +471,21 @@ export default function UnifiedChartsPage() {
         return acc
       }, {} as Record<string, string>)
 
+      // Defaults for theme explorer columns (when editing, keep existing config)
       const baseConfig = { ...editingChart.chart_config }
+      const columns = selectedDataSource?.columns || []
+      const defaultThemeCol = baseConfig.theme_column || columns.find(col => col.toLowerCase().includes('theme')) || 'identified_theme'
+      const defaultTextCol =
+        baseConfig.text_column ||
+        columns.find(col => col.toLowerCase().includes('text')) ||
+        columns.find(col => col.toLowerCase().includes('response')) ||
+        'original_text'
 
       const requestData = {
         chart_name: chartForm.chart_name,
         chart_type: chartForm.chart_type,
-        x_axis_column: isQualitativeCards ? qualitativeForm.unique_column : chartForm.x_axis_column,
-        y_axis_column: isQualitativeCards ? undefined : chartForm.y_axis_column || undefined,
+        x_axis_column: isQualitativeCards ? qualitativeForm.unique_column : isThemeExplorer ? '' : chartForm.x_axis_column,
+        y_axis_column: isQualitativeCards || isThemeExplorer ? undefined : chartForm.y_axis_column || undefined,
         chart_config: isQualitativeCards
           ? {
               ...baseConfig,
@@ -471,6 +495,12 @@ export default function UnifiedChartsPage() {
               quantitative_labels: quantitativeLabels,
               value_formatting: valueFormatting
             }
+          : isThemeExplorer
+            ? {
+                ...baseConfig,
+                theme_column: defaultThemeCol,
+                text_column: defaultTextCol
+              }
           : {
               ...baseConfig,
               aggregation_type: chartForm.aggregation_type,
@@ -685,18 +715,19 @@ export default function UnifiedChartsPage() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3 gap-8">
                   {charts.map((chart) => {
                     const isQualitativeCards = chart.chart_type === 'qualitative_cards'
+                    const isThemeExplorer = chart.chart_type === 'theme_explorer'
                     return (
                       <div 
                         key={chart.id} 
                         className={`border border-gray-200 rounded-xl p-6 hover:border-blue-300 hover:shadow-xl transition-all duration-200 bg-white ${
-                          isQualitativeCards ? 'lg:col-span-2 xl:col-span-2 2xl:col-span-2' : ''
+                          (isQualitativeCards || isThemeExplorer) ? 'lg:col-span-2 xl:col-span-2 2xl:col-span-2' : ''
                         }`}
                       >
                         <div className="flex justify-between items-start mb-6">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 mb-2">
                               <h4 className="text-lg font-semibold text-gray-900 truncate">{chart.chart_name}</h4>
-                              {isQualitativeCards && (
+                              {(isQualitativeCards || isThemeExplorer) && (
                                 <span className="text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded-full font-medium">
                                   Interactive
                                 </span>
@@ -721,12 +752,12 @@ export default function UnifiedChartsPage() {
                           </div>
                         </div>
                         
-                        <div className={`bg-gradient-to-br from-gray-50 to-gray-100/50 rounded-xl p-4 relative ${isQualitativeCards ? '' : 'group'} ${
-                          isQualitativeCards ? 'h-96' : 'h-64'
+                        <div className={`bg-gradient-to-br from-gray-50 to-gray-100/50 rounded-xl p-4 relative ${ (isQualitativeCards || isThemeExplorer) ? '' : 'group'} ${
+                          (isQualitativeCards || isThemeExplorer) ? 'h-[28rem]' : 'h-64'
                         }`}>
                           <ChartDisplay chartId={chart.id} />
-                          {/* Only show overlay for non-qualitative cards */}
-                          {!isQualitativeCards && (
+                          {/* Only show overlay for non-interactive charts */}
+                          {(!isQualitativeCards && !isThemeExplorer) && (
                             <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-opacity rounded-xl flex items-center justify-center opacity-0 group-hover:opacity-100">
                               <button
                                 onClick={() => router.push(`/charts/${chart.id}/view?from=charts`)}
@@ -916,8 +947,8 @@ export default function UnifiedChartsPage() {
                             setChartForm(prev => ({
                               ...prev,
                               chart_type: type.value,
-                              x_axis_column: ['table', 'qualitative_cards'].includes(type.value) ? '' : prev.x_axis_column,
-                              y_axis_column: ['pie', 'histogram', 'table', 'qualitative_cards'].includes(type.value) ? '' : prev.y_axis_column,
+                              x_axis_column: ['table', 'qualitative_cards', 'theme_explorer'].includes(type.value) ? '' : prev.x_axis_column,
+                              y_axis_column: ['pie', 'histogram', 'table', 'qualitative_cards', 'theme_explorer'].includes(type.value) ? '' : prev.y_axis_column,
                               selected_columns: type.value === 'table' ? prev.selected_columns : []
                             }))
                             if (type.value === 'qualitative_cards') {
@@ -1049,7 +1080,7 @@ export default function UnifiedChartsPage() {
                         </div>
                       </div>
                     </div>
-                  ) : selectedDataSource && chartForm.chart_type !== 'table' && (
+                  ) : selectedDataSource && chartForm.chart_type !== 'table' && chartForm.chart_type !== 'theme_explorer' && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         X-Axis Column
@@ -1068,7 +1099,7 @@ export default function UnifiedChartsPage() {
                   )}
 
                   {/* Y-Axis Column - Hide for pie, histogram, table, and qualitative cards */}
-                  {!['pie', 'histogram', 'table', 'qualitative_cards'].includes(chartForm.chart_type) && selectedDataSource && (
+                  {!['pie', 'histogram', 'table', 'qualitative_cards', 'theme_explorer'].includes(chartForm.chart_type) && selectedDataSource && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         Y-Axis Column (optional)
@@ -1147,7 +1178,7 @@ export default function UnifiedChartsPage() {
                   )}
 
                   {/* Aggregation Type - Hide for table and qualitative cards */}
-                  {!['table', 'qualitative_cards'].includes(chartForm.chart_type) && (
+                  {!['table', 'qualitative_cards', 'theme_explorer'].includes(chartForm.chart_type) && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
                         Data Aggregation
@@ -1188,7 +1219,9 @@ export default function UnifiedChartsPage() {
                       (!selectedDataSource && !editingChart) || 
                       (chartForm.chart_type === 'qualitative_cards'
                         ? !qualitativeConfigReady
-                        : chartForm.chart_type !== 'table' && !chartForm.x_axis_column) ||
+                        : chartForm.chart_type === 'theme_explorer'
+                          ? false
+                          : chartForm.chart_type !== 'table' && !chartForm.x_axis_column) ||
                       saving
                     }
                     className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-6 py-2 rounded-lg flex items-center gap-2 transition-colors"

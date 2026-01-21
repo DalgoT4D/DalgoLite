@@ -160,6 +160,7 @@ class AITransformationRequest(BaseModel):
     step_name: str
     user_prompt: str
     output_table_name: Optional[str] = None  # Custom output table name
+    transformation_config: Optional[Dict[str, Any]] = None  # Structured config: {type, groupColumns, etc}
     upstream_step_ids: Optional[List[int]] = []  # Legacy support
     upstream_sheet_ids: Optional[List[int]] = []  # Legacy support
     upstream_tables: Optional[List[Dict[str, Any]]] = []  # New unified format: [{"id": 1, "type": "sheet"}]
@@ -169,6 +170,7 @@ class TransformationStepUpdateRequest(BaseModel):
     step_name: Optional[str] = None
     user_prompt: Optional[str] = None
     output_table_name: Optional[str] = None
+    transformation_config: Optional[Dict[str, Any]] = None  # Structured config: {type, groupColumns, etc}
     upstream_step_ids: Optional[List[int]] = None
     upstream_sheet_ids: Optional[List[int]] = None
     upstream_tables: Optional[List[Dict[str, Any]]] = None
@@ -180,11 +182,12 @@ class QualitativeDataCreateRequest(BaseModel):
     source_table_id: int
     source_table_type: str  # 'sheet' or 'transformation'  
     qualitative_column: str
-    analysis_type: str  # 'sentiment' or 'summarization'
+    analysis_type: str  # 'sentiment', 'summarization', or 'theme-extraction'
     aggregation_column: Optional[str] = None  # Optional column for group-by summarization
     summarize_sentiment_analysis: Optional[bool] = None  # Whether to include sentiment stats
     sentiment_column: Optional[str] = None  # Column containing sentiment analysis results
-    canvas_position: Dict[str, int]
+    expected_themes: Optional[str] = None  # Comma-separated list of expected themes for theme extraction
+    canvas_position: Dict[str, float]
     output_table_name: Optional[str] = None
 
 class QualitativeDataUpdateRequest(BaseModel):
@@ -196,6 +199,7 @@ class QualitativeDataUpdateRequest(BaseModel):
     aggregation_column: Optional[str] = None
     summarize_sentiment_analysis: Optional[bool] = None
     sentiment_column: Optional[str] = None
+    expected_themes: Optional[str] = None
     output_table_name: Optional[str] = None
 
 class CanvasLayoutUpdateRequest(BaseModel):
@@ -1646,6 +1650,38 @@ async def create_unified_chart(chart_request: UnifiedChartCreateRequest, current
 
             x_axis_column = unique_column
             y_axis_column = None
+        elif chart_type_lower == 'theme_explorer':
+            # Theme explorer is qualitative-grouped browsing; default columns
+            values = fetch_source_values_for_chart(chart_request.source_type, chart_request.source_id, current_user, db)
+            if not values or len(values) < 2:
+                raise HTTPException(status_code=400, detail="No data available to validate Theme Explorer")
+
+            headers = values[0]
+            data_rows = values[1:]
+
+            # Choose theme/text columns with sensible defaults
+            theme_column = chart_config.get('theme_column')
+            text_column = chart_config.get('text_column')
+
+            if not theme_column:
+                theme_column = next((h for h in headers if 'theme' in h.lower()), 'identified_theme')
+            if not text_column:
+                text_column = next((h for h in headers if 'text' in h.lower()), None) \
+                    or next((h for h in headers if 'response' in h.lower()), None) \
+                    or 'original_text'
+
+            if theme_column not in headers:
+                raise HTTPException(status_code=400, detail=f"Theme column '{theme_column}' not found in data source")
+            if text_column not in headers:
+                raise HTTPException(status_code=400, detail=f"Text column '{text_column}' not found in data source")
+
+            chart_config['theme_column'] = theme_column
+            chart_config['text_column'] = text_column
+            chart_config['source_type'] = chart_request.source_type
+            chart_config['source_id'] = chart_request.source_id
+
+            x_axis_column = None
+            y_axis_column = None
         else:
             chart_config.update({
                 "source_type": chart_request.source_type,
@@ -1686,9 +1722,15 @@ async def get_chart_data(chart_id: int, current_user: User = Depends(get_current
         if not chart:
             raise HTTPException(status_code=404, detail="Chart not found")
 
+        # High-level debug for chart lookup
+        print(f"DEBUG: Fetching chart data - id={chart_id}, type={chart.chart_type}, name={chart.chart_name}")
+        print(f"DEBUG: Chart config: {chart.chart_config}")
+        print(f"DEBUG: x_axis_column={chart.x_axis_column}, y_axis_column={chart.y_axis_column}")
+
         # Get data based on chart source (check config first, then fallback to legacy fields)
         source_type = chart.chart_config.get("source_type")
         source_id = chart.chart_config.get("source_id")
+        print(f"DEBUG: Chart source_type={source_type}, source_id={source_id}, sheet_id={chart.sheet_id}, project_id={chart.project_id}")
 
         if source_type == "sheet" or chart.sheet_id:
             # Get data from Google Sheet
@@ -1720,10 +1762,11 @@ async def get_chart_data(chart_id: int, current_user: User = Depends(get_current
                         ).execute()
                     except Exception as fallback_error:
                         raise Exception(f"Range parsing failed: {str(range_error)}. Fallback also failed: {str(fallback_error)}")
-                
+            
                 values = result.get('values', [])
                 if not values:
                     raise HTTPException(status_code=404, detail="No data found in sheet")
+                print(f"DEBUG: Sheet data fetched - rows={len(values)-1 if values else 0}, columns={len(values[0]) if values else 0}")
                     
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Failed to fetch sheet data: {str(e)}")
@@ -1744,6 +1787,7 @@ async def get_chart_data(chart_id: int, current_user: User = Depends(get_current
                         raise HTTPException(status_code=404, detail="No data in join table")
                     
                     columns = list(result.keys())
+                    print(f"DEBUG: Join chart using table '{join_op.output_table_name}' with columns: {columns} and rows: {len(rows)}")
                     values = [columns] + [list(row) for row in rows]
                     
             except Exception as e:
@@ -1774,6 +1818,7 @@ async def get_chart_data(chart_id: int, current_user: User = Depends(get_current
                         raise HTTPException(status_code=404, detail="No data in transformation table")
                     
                     columns = list(result.keys())
+                    print(f"DEBUG: Transformation chart using table '{table_names[0]}' with columns: {columns} and rows: {len(rows)}")
                     values = [columns] + [list(row) for row in rows]
                     
             except Exception as e:
@@ -1787,15 +1832,29 @@ async def get_chart_data(chart_id: int, current_user: User = Depends(get_current
                 ).first()
                 if not qual_op or qual_op.status != 'completed':
                     raise HTTPException(status_code=404, detail="Qualitative operation not completed")
-                    
+
+                table_name = getattr(qual_op, 'actual_table_name', None) or qual_op.output_table_name
+                if not table_name:
+                    raise HTTPException(status_code=404, detail="No qualitative output table available")
+
                 with engine.connect() as conn:
-                    result = conn.execute(text(f"SELECT * FROM {qual_op.output_table_name} LIMIT 1000"))
+                    safe_table_name = table_name.replace('"', '""')
+                    try:
+                        result = conn.execute(text(f'SELECT * FROM "{safe_table_name}" LIMIT 1000'))
+                    except Exception as primary_err:
+                        # Try a sanitized fallback (for legacy names with special chars)
+                        sanitized = re.sub(r'[^\w]', '_', table_name.lower())
+                        print(f"DEBUG: Qualitative chart data primary query failed for '{table_name}': {primary_err}. Trying sanitized '{sanitized}'")
+                        fallback_safe = sanitized.replace('"', '""')
+                        result = conn.execute(text(f'SELECT * FROM "{fallback_safe}" LIMIT 1000'))
                     rows = result.fetchall()
                     
                     if not rows:
                         raise HTTPException(status_code=404, detail="No data in qualitative table")
                     
                     columns = list(result.keys())
+                    print(f"DEBUG: Qualitative chart using table '{table_name}' (safe '{safe_table_name}') with columns: {columns}")
+                    print(f"DEBUG: Qualitative rows fetched: {len(rows)}")
                     values = [columns] + [list(row) for row in rows]
                     
             except Exception as e:
@@ -1845,6 +1904,10 @@ async def get_chart_data(chart_id: int, current_user: User = Depends(get_current
 
         chart_type_lower = chart.chart_type.lower()
 
+        # Guard against missing x-axis column for non-table, non-qualitative_cards charts
+        if chart_type_lower not in ['table', 'qualitative_cards', 'theme_explorer'] and (not chart.x_axis_column or not chart.x_axis_column.strip()):
+            raise HTTPException(status_code=400, detail="Chart is missing x_axis_column")
+
         if chart_type_lower == 'qualitative_cards':
             unique_column = chart.chart_config.get('unique_column')
             qualitative_column = chart.chart_config.get('qualitative_column')
@@ -1875,6 +1938,46 @@ async def get_chart_data(chart_id: int, current_user: User = Depends(get_current
                 "data": {
                     "raw_data": raw_records,
                     "metadata": metadata
+                },
+                "options": {},
+                "chart_config": chart.chart_config
+            }
+        elif chart_type_lower == 'theme_explorer':
+            theme_column = chart.chart_config.get('theme_column', 'identified_theme')
+            text_column = chart.chart_config.get('text_column', 'original_text')
+
+            raw_records = []
+            for row in data_rows:
+                if not row:
+                    continue
+                record = {}
+                for idx, header in enumerate(headers):
+                    record[header] = row[idx] if idx < len(row) else None
+                raw_records.append(record)
+
+            if theme_column not in headers:
+                raise HTTPException(status_code=400, detail=f"Theme column '{theme_column}' not found")
+            if text_column not in headers:
+                raise HTTPException(status_code=400, detail=f"Text column '{text_column}' not found")
+
+            grouped = {}
+            for rec in raw_records:
+                theme_val = rec.get(theme_column) or "Unknown"
+                grouped.setdefault(theme_val, []).append({
+                    "text": rec.get(text_column),
+                    "record": rec
+                })
+
+            themes_payload = [{"theme": theme, "items": items} for theme, items in grouped.items()]
+
+            return {
+                "chart_id": chart.id,
+                "chart_name": chart.chart_name,
+                "chart_type": chart.chart_type,
+                "data": {
+                    "themes": themes_payload,
+                    "theme_column": theme_column,
+                    "text_column": text_column
                 },
                 "options": {},
                 "chart_config": chart.chart_config
@@ -2889,8 +2992,8 @@ async def create_qualitative_data_operation(
             )
         
         # Validate analysis type
-        if request.analysis_type not in ['sentiment', 'summarization']:
-            raise HTTPException(status_code=400, detail="Invalid analysis_type. Must be 'sentiment' or 'summarization'")
+        if request.analysis_type not in ['sentiment', 'summarization', 'theme-extraction']:
+            raise HTTPException(status_code=400, detail="Invalid analysis_type. Must be 'sentiment', 'summarization', or 'theme-extraction'")
         
         # Debug aggregation column
         print(f"🚀 CREATE DEBUG: aggregation_column = {repr(request.aggregation_column)}")
@@ -2916,6 +3019,7 @@ async def create_qualitative_data_operation(
             aggregation_column=clean_aggregation_column,
             summarize_sentiment_analysis=request.summarize_sentiment_analysis,
             sentiment_column=request.sentiment_column,
+            expected_themes=request.expected_themes,
             canvas_position=request.canvas_position,
             output_table_name=request.output_table_name
         )
@@ -3006,11 +3110,12 @@ async def update_qualitative_data_operation(
         aggregation_column = request.aggregation_column if request.aggregation_column is not None else getattr(operation, 'aggregation_column', None)
         summarize_sentiment_analysis = request.summarize_sentiment_analysis if request.summarize_sentiment_analysis is not None else getattr(operation, 'summarize_sentiment_analysis', False)
         sentiment_column = request.sentiment_column if request.sentiment_column is not None else getattr(operation, 'sentiment_column', None)
+        expected_themes = request.expected_themes if request.expected_themes is not None else getattr(operation, 'expected_themes', None)
         output_table_name = request.output_table_name if request.output_table_name is not None else operation.output_table_name
         
         # Validate analysis type if provided
-        if request.analysis_type and request.analysis_type not in ['sentiment', 'summarization']:
-            raise HTTPException(status_code=400, detail="Invalid analysis_type. Must be 'sentiment' or 'summarization'")
+        if request.analysis_type and request.analysis_type not in ['sentiment', 'summarization', 'theme-extraction']:
+            raise HTTPException(status_code=400, detail="Invalid analysis_type. Must be 'sentiment', 'summarization', or 'theme-extraction'")
         
         # Update the operation
         updated_operation = qualitative_repo.update_qualitative_operation(
@@ -3023,6 +3128,7 @@ async def update_qualitative_data_operation(
             aggregation_column=aggregation_column,
             summarize_sentiment_analysis=summarize_sentiment_analysis,
             sentiment_column=sentiment_column,
+            expected_themes=expected_themes,
             output_table_name=output_table_name
         )
         
@@ -3095,7 +3201,8 @@ async def execute_qualitative_data_operation(
                 analysis_type=operation.analysis_type,
                 aggregation_column=operation.aggregation_column,
                 summarize_sentiment_analysis=getattr(operation, 'summarize_sentiment_analysis', False),
-                sentiment_column=getattr(operation, 'sentiment_column', None)
+                sentiment_column=getattr(operation, 'sentiment_column', None),
+                expected_themes=getattr(operation, 'expected_themes', None)
             )
             
             if not analysis_result.get('success'):
@@ -3109,13 +3216,14 @@ async def execute_qualitative_data_operation(
             print(f"DEBUG: First few result rows:\n{result_df.head()}")
             
             # Generate output table name using same logic as AI transformations
+            import re
             if operation.output_table_name:
                 # Use custom table name if provided
-                import re
                 output_table_name = re.sub(r'[^\w]', '_', operation.output_table_name.lower())
             else:
-                # Use default pattern
-                output_table_name = f"qualitative_{operation.analysis_type}_{operation.id}_{int(time.time())}"
+                # Use default pattern (sanitized to avoid invalid identifiers)
+                default_name = f"qualitative_{operation.analysis_type}_{operation.id}_{int(time.time())}"
+                output_table_name = re.sub(r'[^\w]', '_', default_name.lower())
             
             print(f"DEBUG: Saving result to table: {output_table_name}")
             
@@ -3134,6 +3242,7 @@ async def execute_qualitative_data_operation(
                     operation_id=operation_id,
                     status='completed',
                     actual_table_name=output_table_name,
+                    output_table_name=output_table_name,
                     output_columns=list(result_df.columns),
                     execution_time_ms=execution_time_ms,
                     total_records=analysis_result.get('total_records', len(source_df)),
@@ -3145,6 +3254,7 @@ async def execute_qualitative_data_operation(
                 qualitative_repo.update_qualitative_status(
                     operation_id=operation_id,
                     status='completed',
+                    output_table_name=output_table_name,
                     output_columns=list(result_df.columns),
                     execution_time_ms=execution_time_ms,
                     total_records=analysis_result.get('total_records', len(source_df)),
@@ -4169,6 +4279,11 @@ async def get_project_data_sources(project_id: int, current_user: User = Depends
         # Use the unified table discovery method
         data_sources = project_repo.get_all_available_tables(current_user.id, project_id)
         
+        # Debug logging for available tables
+        print(f"📊 DEBUG AVAILABLE TABLES: Found {len(data_sources)} data sources for project {project_id}")
+        for source in data_sources:
+            print(f"   - {source['type']}_{source['id']}: {source['name']} (status: {source.get('status', 'unknown')})")
+        
         # Format for backward compatibility
         formatted_sources = []
         for source in data_sources:
@@ -4474,6 +4589,7 @@ async def create_ai_transformation_step(
             step_name=request.step_name,
             user_prompt=request.user_prompt,
             output_table_name=request.output_table_name,
+            transformation_config=request.transformation_config,  # Store structured config
             generated_code=ai_result['code'],
             code_summary=ai_result['summary'],
             code_explanation=ai_result['explanation'],
@@ -4497,6 +4613,7 @@ async def create_ai_transformation_step(
             "id": transformation_step.id,
             "step_name": transformation_step.step_name,
             "user_prompt": transformation_step.user_prompt,
+            "transformation_config": transformation_step.transformation_config,  # Include structured config
             "generated_code": transformation_step.generated_code,
             "code_summary": transformation_step.code_summary,
             "code_explanation": transformation_step.code_explanation,
@@ -4528,6 +4645,7 @@ async def get_project_transformation_steps(project_id: int, db: Session = Depend
                     "id": step.id,
                     "step_name": step.step_name,
                     "user_prompt": step.user_prompt,
+                    "transformation_config": step.transformation_config,  # Include structured config
                     "generated_code": step.generated_code,
                     "code_summary": step.code_summary,
                     "code_explanation": step.code_explanation,
@@ -4581,6 +4699,8 @@ async def update_transformation_step(
             step.user_prompt = request.user_prompt
             # Regenerate code if prompt changed
             # TODO: Implement code regeneration
+        if request.transformation_config is not None:
+            step.transformation_config = request.transformation_config  # Update structured config
         if request.output_table_name is not None:
             step.output_table_name = request.output_table_name.strip() if request.output_table_name.strip() else None
         if request.upstream_step_ids is not None:
@@ -4626,13 +4746,19 @@ async def delete_transformation_step(step_id: int, db: Session = Depends(get_db)
             raise HTTPException(status_code=404, detail="Transformation step not found")
         
         # Delete output table if it exists
+        print(f"🗑️ DEBUG DELETION: Starting deletion of step {step.id}")
+        print(f"🗑️ DEBUG DELETION: Step name: {step.step_name}")
+        print(f"🗑️ DEBUG DELETION: Output table name: {step.output_table_name}")
+        
         if step.output_table_name:
             try:
+                print(f"🗑️ DEBUG DELETION: Attempting to drop table: {step.output_table_name}")
                 with engine.connect() as conn:
                     conn.execute(text(f"DROP TABLE IF EXISTS {step.output_table_name}"))
                     conn.commit()
+                print(f"✅ DEBUG DELETION: Successfully dropped table: {step.output_table_name}")
             except Exception as e:
-                print(f"Warning: Failed to drop transformation table {step.output_table_name}: {e}")
+                print(f"❌ DEBUG DELETION: Failed to drop transformation table {step.output_table_name}: {e}")
         else:
             # Try to drop default table name pattern
             try:
@@ -4640,14 +4766,27 @@ async def delete_transformation_step(step_id: int, db: Session = Depends(get_db)
                 table_name = f"transform_step_{step.id}_{step_name_clean}"
                 import re
                 table_name = re.sub(r'[^\w]', '_', table_name)
+                print(f"🗑️ DEBUG DELETION: Attempting to drop default table: {table_name}")
                 with engine.connect() as conn:
                     conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
                     conn.commit()
+                print(f"✅ DEBUG DELETION: Successfully dropped default table: {table_name}")
             except Exception as e:
-                print(f"Warning: Failed to drop default transformation table for step {step.id}: {e}")
+                print(f"❌ DEBUG DELETION: Failed to drop default transformation table for step {step.id}: {e}")
+        
+        # Check what tables exist after deletion
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%transform%';"))
+                remaining_tables = [row[0] for row in result]
+                print(f"🔍 DEBUG DELETION: Tables remaining after deletion: {remaining_tables}")
+        except Exception as e:
+            print(f"❌ DEBUG DELETION: Failed to check remaining tables: {e}")
         
         db.delete(step)
         db.commit()
+        
+        print(f"✅ DEBUG DELETION: Successfully deleted step {step.id} from database")
         
         return {"message": "Transformation step deleted successfully"}
         

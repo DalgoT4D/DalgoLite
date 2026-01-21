@@ -114,6 +114,16 @@ IMPORTANT RULES:
 6. Return valid Python code that can be executed
 7. Keep the column names the same as it is in the original df whenever possible. If adding new columns, follow the same naming convention that was used in the original df.
 
+SPECIAL HANDLING FOR THEME EXTRACTION:
+When the request involves theme extraction, follow this pattern:
+- Use a helper function to classify text into themes
+- Create columns: 'original_text', 'identified_theme', 'confidence_score'
+- Include row_id for tracking original records
+- Preserve all original columns
+- Classify texts into provided themes or 'Others' if no fit
+- Use semantic analysis, not just keyword matching
+- Ensure robust handling of edge cases (empty text, special characters)
+
 Response format - return ONLY a JSON object with these fields:
 {
     "code": "# Python pandas code here",
@@ -126,12 +136,54 @@ Examples of transformations:
 - "delete xyz column" → df = df.drop('xyz', axis=1)
 - "add column abc with sum of x and y" → df['abc'] = df['x'] + df['y']
 - "filter rows where status is active" → df = df[df['status'] == 'active']
-- "group by category and sum amounts" → df = df.groupby('category')['amount'].sum().reset_index()"""
+- "group by category and sum amounts" → df = df.groupby('category')['amount'].sum().reset_index()
+- "extract themes from reviews" → Complex theme classification with confidence scores"""
 
     def _create_user_message(
         self, user_prompt: str, data_preview: str, columns: List[str]
     ) -> str:
         """Create user message with prompt and data context"""
+        
+        # Enhanced prompt for theme extraction
+        if "extract themes" in user_prompt.lower() or "theme extraction" in user_prompt.lower():
+            return f"""Please generate pandas transformation code for THEME EXTRACTION:
+
+USER REQUEST: "{user_prompt}"
+
+{data_preview}
+
+Available columns: {', '.join(columns)}
+
+THEME EXTRACTION REQUIREMENTS:
+1. Create a robust theme classification function that uses semantic analysis
+2. Output table MUST include these columns:
+   - 'original_text': The original text being analyzed
+   - 'identified_theme': The classified theme name
+   - 'confidence_score': Float between 0-1 indicating classification confidence
+   - 'row_id': Original row identifier for tracking
+   - ALL original columns from input data
+
+3. Classification Logic:
+   - If specific themes are mentioned in the prompt, use those as primary categories
+   - Always include 'Others' as a fallback category for texts that don't fit
+   - Use semantic meaning, not just keyword matching
+   - Handle edge cases: empty text, very short text, special characters
+   - Assign confidence scores based on clarity of theme match
+
+4. Code Structure:
+   ```python
+   def classify_theme(text, expected_themes):
+       # Your classification logic here
+       return theme, confidence
+   
+   # Apply classification to all rows
+   # Create the required output columns
+   # Preserve original data
+   ```
+
+Generate robust, production-ready code following these specifications."""
+        
+        # Standard prompt for other transformations
         return f"""Please generate pandas transformation code for the following request:
 
 USER REQUEST: "{user_prompt}"

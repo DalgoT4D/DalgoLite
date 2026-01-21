@@ -92,7 +92,7 @@ else
 fi
 
 # Test onboarding page
-STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" $FRONTEND_URL/onboarding/onboarding_1)
+STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" $FRONTEND_URL/onboarding)
 if [ "$STATUS_CODE" = "200" ]; then
     echo -e "   ${GREEN}✅ Onboarding page loads${NC}"
 else

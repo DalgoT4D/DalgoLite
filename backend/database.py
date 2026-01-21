@@ -111,6 +111,7 @@ class AITransformationStep(Base):
     code_explanation = Column(Text)  # Detailed explanation
     input_columns = Column(JSON)  # Expected input columns
     output_columns = Column(JSON)  # Expected output columns after transformation
+    transformation_config = Column(JSON)  # Structured configuration: {type, groupColumns, qualitativeColumns, etc}
     upstream_step_ids = Column(JSON)  # IDs of upstream transformation steps (legacy)
     upstream_sheet_ids = Column(JSON)  # IDs of upstream sheets (legacy)
     upstream_tables = Column(JSON)  # Unified upstream tables: [{"id": 1, "type": "sheet"}, {"id": 2, "type": "transformation"}]
@@ -242,11 +243,13 @@ class QualitativeDataOperation(Base):
     source_table_id = Column(Integer, nullable=False)  # Sheet or transformation step ID
     source_table_type = Column(String, nullable=False)  # 'sheet' or 'transformation'
     qualitative_column = Column(String, nullable=False)  # Column containing qualitative data
-    analysis_type = Column(String, nullable=False)  # 'sentiment' or 'summarization'
+    analysis_type = Column(String, nullable=False)  # 'sentiment', 'summarization', or 'theme-extraction'
     aggregation_column = Column(String)  # Optional column for group-by summarization
     # Sentiment analysis options for summarization
     summarize_sentiment_analysis = Column(Boolean, default=False)  # Whether to include sentiment stats
     sentiment_column = Column(String)  # Column containing sentiment analysis results
+    # Theme extraction options
+    expected_themes = Column(String)  # Comma-separated list of expected themes for theme extraction
     status = Column(String, default='pending')  # 'pending', 'running', 'completed', 'failed'
     error_message = Column(Text)
     output_table_name = Column(String)  # User-configured custom table name
@@ -469,6 +472,7 @@ def migrate_database():
                 conn.execute(text("ALTER TABLE ai_transformation_steps ADD COLUMN upstream_tables TEXT"))
                 conn.commit()
             print("Upstream tables column added successfully")
+        
 
     # Check if we need to migrate join_operations table
     if 'join_operations' in existing_tables:
@@ -840,7 +844,8 @@ class QualitativeDataRepository:
                                    output_table_name: Optional[str] = None,
                                    aggregation_column: Optional[str] = None,
                                    summarize_sentiment_analysis: Optional[bool] = None,
-                                   sentiment_column: Optional[str] = None) -> QualitativeDataOperation:
+                                   sentiment_column: Optional[str] = None,
+                                   expected_themes: Optional[str] = None) -> QualitativeDataOperation:
         qualitative_op = QualitativeDataOperation(
             project_id=project_id,
             name=name,
@@ -851,6 +856,7 @@ class QualitativeDataRepository:
             aggregation_column=aggregation_column,
             summarize_sentiment_analysis=summarize_sentiment_analysis or False,
             sentiment_column=sentiment_column,
+            expected_themes=expected_themes,
             canvas_position=canvas_position or {"x": 0, "y": 0},
             status='pending',
             output_table_name=output_table_name
@@ -873,7 +879,7 @@ class QualitativeDataRepository:
     def update_qualitative_status(self, operation_id: int, status: str, error_message: str = None,
                                 output_columns: List[str] = None, execution_time_ms: int = None,
                                 actual_table_name: str = None, total_records: int = None,
-                                batch_count: int = None) -> Optional[QualitativeDataOperation]:
+                                batch_count: int = None, output_table_name: str = None) -> Optional[QualitativeDataOperation]:
         qualitative_op = self.get_qualitative_operation_by_id(operation_id)
         if qualitative_op:
             qualitative_op.status = status
@@ -890,6 +896,8 @@ class QualitativeDataRepository:
                 else:
                     # Fallback for older database schema
                     print(f"DEBUG: actual_table_name field not available, skipping")
+            if output_table_name:
+                qualitative_op.output_table_name = output_table_name
             if total_records is not None:
                 qualitative_op.total_records_processed = int(total_records)
             if batch_count is not None:
@@ -905,7 +913,8 @@ class QualitativeDataRepository:
                                    analysis_type: str, aggregation_column: Optional[str] = None,
                                    output_table_name: Optional[str] = None,
                                    summarize_sentiment_analysis: Optional[bool] = None,
-                                   sentiment_column: Optional[str] = None) -> Optional[QualitativeDataOperation]:
+                                   sentiment_column: Optional[str] = None,
+                                   expected_themes: Optional[str] = None) -> Optional[QualitativeDataOperation]:
         qualitative_op = self.get_qualitative_operation_by_id(operation_id)
         if qualitative_op:
             qualitative_op.name = name
@@ -918,6 +927,7 @@ class QualitativeDataRepository:
             if summarize_sentiment_analysis is not None:
                 qualitative_op.summarize_sentiment_analysis = summarize_sentiment_analysis
             qualitative_op.sentiment_column = sentiment_column
+            qualitative_op.expected_themes = expected_themes
             qualitative_op.updated_at = datetime.now(timezone.utc)
             
             self.db.commit()

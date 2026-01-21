@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
+import { useEffect, useRef, forwardRef, useImperativeHandle, useState } from 'react'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -19,6 +19,81 @@ import {
 } from 'chart.js'
 import { Bar, Line, Pie, Scatter } from 'react-chartjs-2'
 import QualitativeCardsChart from './QualitativeCardsChart'
+
+const ThemeExplorer = ({ data }: { data: any }) => {
+  const themes = data?.themes || []
+  const [activeThemeIdx, setActiveThemeIdx] = useState(0)
+  const [activeItemIdx, setActiveItemIdx] = useState(0)
+
+  if (!themes.length) {
+    return <div className="p-4 text-gray-500 text-sm">No themes available.</div>
+  }
+
+  const activeTheme = themes[activeThemeIdx]
+  const items = activeTheme?.items || []
+  const activeItem = items[activeItemIdx] || {}
+
+  const nextItem = () => {
+    if (items.length === 0) return
+    setActiveItemIdx((prev) => (prev + 1) % items.length)
+  }
+
+  const prevItem = () => {
+    if (items.length === 0) return
+    setActiveItemIdx((prev) => (prev - 1 + items.length) % items.length)
+  }
+
+  const selectTheme = (idx: number) => {
+    setActiveThemeIdx(idx)
+    setActiveItemIdx(0)
+  }
+
+  return (
+    <div className="h-full flex flex-col gap-3">
+      <div className="flex flex-wrap gap-2">
+        {themes.map((t: any, idx: number) => (
+          <button
+            key={t.theme || idx}
+            onClick={() => selectTheme(idx)}
+            className={`px-3 py-1 rounded-full text-sm border ${
+              idx === activeThemeIdx ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300'
+            }`}
+          >
+            {t.theme || 'Unknown'}
+            <span className="ml-2 text-xs text-gray-500">{t.items?.length || 0}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="border rounded-lg p-4 bg-white shadow-sm flex flex-col gap-3">
+        <div className="text-xs text-gray-500 uppercase tracking-wide">Theme</div>
+        <div className="text-lg font-semibold text-gray-900">{activeTheme?.theme || 'Unknown'}</div>
+        <div className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed min-h-[80px]">
+          {activeItem?.text || 'No text available.'}
+        </div>
+        <div className="flex items-center justify-between text-xs text-gray-500">
+          <span>
+            {items.length ? `Review ${activeItemIdx + 1} of ${items.length}` : 'No reviews'}
+          </span>
+          <div className="flex gap-2">
+            <button
+              onClick={prevItem}
+              className="px-3 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
+            >
+              Prev
+            </button>
+            <button
+              onClick={nextItem}
+              className="px-3 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 ChartJS.register(
   CategoryScale,
@@ -210,6 +285,8 @@ const ChartRenderer = forwardRef<ChartRendererRef, ChartRendererProps>(({ type, 
             metadata={data?.metadata}
           />
         )
+      case 'theme_explorer':
+        return <ThemeExplorer data={data} />
       default:
         return <Bar ref={chartRef} data={data} options={options} />
     }

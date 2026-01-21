@@ -10,8 +10,6 @@ import {
   CheckCircle, 
   AlertCircle, 
   Code, 
-  Eye, 
-  EyeOff,
   Edit3,
   Trash2,
   Table,
@@ -32,15 +30,168 @@ interface TransformationData {
     error_message?: string
     execution_time_ms?: number
     output_columns?: string[]
+    input_columns?: string[]
   }
   onUpdate?: (stepId: number, updates: any) => Promise<void>
   onExecute?: (stepId: number) => Promise<void>
   onDelete?: (stepId: number) => Promise<void>
   onViewData?: (stepId: number, stepName: string, status: string) => void
+  availableColumns?: string[]
+}
+
+// Configuration parsing helpers
+const parseTransformationConfig = (userPrompt: string) => {
+  const config: any = {
+    transformationType: 'custom',
+    groupColumns: [],
+    qualitativeColumns: [],
+    aggregationColumns: [],
+    customPrompt: userPrompt,
+    manualThemes: [],
+    includeSentiment: false
+  }
+  
+  // Enhanced parsing with multiple patterns for robustness
+  
+  // Parse grouped summarization patterns - multiple variations
+  const groupPatterns = [
+    /group\s+by\s+['"`]?([^'"`\n,]+?)['"`]?\s*(?:and|$|\.)/i,
+    /grouped?\s+summarization.*['"`]?([^'"`\n,]+?)['"`]/i,
+    /summarize.*group.*by\s+['"`]?([^'"`\n,]+?)['"`]/i,
+    /group.*['"`]?([^'"`\n,]+?)['"`].*summary/i,
+    /aggregate.*by\s+['"`]?([^'"`\n,]+?)['"`]/i
+  ]
+  
+  for (const pattern of groupPatterns) {
+    const match = userPrompt.match(pattern)
+    if (match) {
+      config.transformationType = 'grouped-summarization'
+      config.groupColumns = [match[1].trim()]
+      break
+    }
+  }
+  
+  // Parse theme extraction patterns - comprehensive
+  const themePatterns = [
+    /extract\s+themes?\s+from\s+['"`]?([^'"`\n,]+?)['"`]?(?:\s|\.)/i,
+    /theme\s+extraction.*from\s+['"`]?([^'"`\n,]+?)['"`]/i,
+    /identify\s+themes.*in\s+['"`]?([^'"`\n,]+?)['"`]/i,
+    /classify.*['"`]?([^'"`\n,]+?)['"`].*themes?/i,
+    /theme.*analysis.*of\s+['"`]?([^'"`\n,]+?)['"`]/i
+  ]
+  
+  for (const pattern of themePatterns) {
+    const match = userPrompt.match(pattern)
+    if (match) {
+      config.transformationType = 'theme-extraction'
+      config.qualitativeColumns = [match[1].trim()]
+      
+      // Parse manual themes with multiple patterns
+      const themeListPatterns = [
+        /(?:expected\s+)?themes?:\s*([^.]+?)(?:\.|$)/i,
+        /Expected\s+themes:\s*([^.]+?)(?:\.|$)/i,
+        /themes?\s*\[([^\]]+)\]/i,
+        /themes?\s*\(([^)]+)\)/i,
+        /use.*themes?:?\s*([^.]+?)(?:\.|$)/i
+      ]
+      
+      for (const themePattern of themeListPatterns) {
+        const themeMatch = userPrompt.match(themePattern)
+        if (themeMatch) {
+          const themesList = themeMatch[1].split(',').map(t => t.trim()).filter(t => t.length > 0)
+          config.manualThemes = themesList
+          break
+        }
+      }
+      break
+    }
+  }
+  
+  // Parse qualitative column patterns (for other analysis types) - enhanced
+  if (!config.qualitativeColumns.length) {
+    const qualitativePatterns = [
+      /(?:qualitative\s+analysis\s+of|perform\s+qualitative\s+analysis\s+of|analyze)\s+['"`]?([^'"`\n,]+?)['"`]?(?:\s|$|\.)/i,
+      /sentiment.*analysis.*of\s+['"`]?([^'"`\n,]+?)['"`]/i,
+      /analyze.*text.*in\s+['"`]?([^'"`\n,]+?)['"`]/i,
+      /text.*analysis.*column\s+['"`]?([^'"`\n,]+?)['"`]/i,
+      /review.*['"`]?([^'"`\n,]+?)['"`].*column/i
+    ]
+    
+    for (const pattern of qualitativePatterns) {
+      const match = userPrompt.match(pattern)
+      if (match) {
+        config.qualitativeColumns = [match[1].trim()]
+        break
+      }
+    }
+  }
+  
+  // Parse sentiment analysis patterns
+  if (userPrompt.match(/sentiment\s+analysis|with\s+sentiment/i)) {
+    config.includeSentiment = true
+  }
+  
+  console.log('DEBUG parseTransformationConfig:', config)
+  return config
+}
+
+// Normalize stored/parsed configs to ensure expected shape (esp. qualitativeColumns)
+const normalizeConfig = (rawConfig: any, userPrompt: string) => {
+  const base = {
+    transformationType: 'custom',
+    groupColumns: [],
+    qualitativeColumns: [],
+    aggregationColumns: [],
+    customPrompt: userPrompt,
+    manualThemes: [],
+    includeSentiment: false,
+    ...rawConfig,
+  }
+
+  // Legacy/singular qualitative column keys
+  const legacyQualCol = rawConfig?.qualitative_column || rawConfig?.qualitativeColumn || rawConfig?.text_column
+  if (!Array.isArray(base.qualitativeColumns)) {
+    base.qualitativeColumns = base.qualitativeColumns ? [String(base.qualitativeColumns)] : []
+  }
+  if (base.qualitativeColumns.length === 0 && legacyQualCol) {
+    base.qualitativeColumns = [String(legacyQualCol)]
+  }
+
+  // If still missing for theme extraction, try parsing the prompt
+  if (base.transformationType === 'theme-extraction' && base.qualitativeColumns.length === 0) {
+    const parsed = parseTransformationConfig(userPrompt)
+    if (parsed.qualitativeColumns.length) {
+      base.qualitativeColumns = parsed.qualitativeColumns
+    }
+  }
+
+  return base
+}
+
+const generatePromptFromConfig = (config: any) => {
+  if (config.transformationType === 'grouped-summarization') {
+    let prompt = `Group by ${config.groupColumns.join(', ')}`
+    if (config.qualitativeColumns.length > 0) {
+      prompt += ` and perform qualitative analysis of ${config.qualitativeColumns.join(', ')}`
+    }
+    if (config.includeSentiment) {
+      prompt += ' with sentiment analysis'
+    }
+    return prompt
+  } else if (config.transformationType === 'theme-extraction') {
+    let prompt = `Extract themes from ${config.qualitativeColumns.join(', ')}`
+    if (config.manualThemes.length > 0) {
+      prompt += `. Expected themes: ${config.manualThemes.join(', ')}`
+    }
+    prompt += `. Classify each text into identified themes or 'Others' if not fitting.`
+    return prompt
+  }
+  return config.customPrompt || ''
 }
 
 export default function TransformationNode({ data }: NodeProps<TransformationData>) {
-  const { step, onUpdate, onExecute, onDelete, onViewData } = data
+  console.log('DEBUG: TransformationNode rendering, step:', data.step.step_name)
+  const { step, onUpdate, onExecute, onDelete, onViewData, availableColumns = [] } = data
   
   // DEBUG: Log step data to see what we're actually getting
   console.log('TransformationNode step data:', {
@@ -51,9 +202,27 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
   })
   const [showCodeModal, setShowCodeModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
+  
+  // Debug: Log showEditModal state changes
+  useEffect(() => {
+    console.log('DEBUG: showEditModal state changed to:', showEditModal)
+    if (showEditModal) {
+      console.log('DEBUG: Edit modal should be rendering now')
+    }
+  }, [showEditModal])
   const [editName, setEditName] = useState(step.step_name)
   const [editPrompt, setEditPrompt] = useState(step.user_prompt)
   const [editTableName, setEditTableName] = useState('')
+  
+  // Enhanced edit state for structured configurations
+  const [editConfig, setEditConfig] = useState(() => {
+    // Use stored transformation_config if available, otherwise parse from user_prompt (fallback for legacy data)
+    const config = normalizeConfig(step.transformation_config || parseTransformationConfig(step.user_prompt), step.user_prompt)
+    console.log('DEBUG: Initial editConfig from step.transformation_config:', step.transformation_config)
+    console.log('DEBUG: Final config used:', config)
+    return config
+  })
+  const [isAdvancedMode, setIsAdvancedMode] = useState(false)
   
   // Modal drag states
   const [editModalPosition, setEditModalPosition] = useState({ x: 0, y: 0 })
@@ -127,7 +296,10 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
   }
 
   const handleSaveEdit = async () => {
-    const hasChanges = editName !== step.step_name || editPrompt !== step.user_prompt || editTableName.trim()
+    // Generate prompt from config if not in advanced mode
+    const finalPrompt = isAdvancedMode ? editPrompt : generatePromptFromConfig(editConfig)
+    
+    const hasChanges = editName !== step.step_name || finalPrompt !== step.user_prompt || editTableName.trim()
     
     if (onUpdate && hasChanges) {
       const updates: any = {}
@@ -136,9 +308,11 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
       if (editName !== step.step_name) {
         updates.step_name = editName
       }
-      if (editPrompt !== step.user_prompt) {
-        updates.user_prompt = editPrompt
+      if (finalPrompt !== step.user_prompt) {
+        updates.user_prompt = finalPrompt
       }
+      // Always send structured config when editing (the source of truth!)
+      updates.transformation_config = editConfig
       if (editTableName.trim()) {
         updates.output_table_name = editTableName.trim()
       }
@@ -158,9 +332,11 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
     setEditName(step.step_name)
     setEditPrompt(step.user_prompt)
     setEditTableName(step.output_table_name || '')
+    setEditConfig(normalizeConfig(step.transformation_config || parseTransformationConfig(step.user_prompt), step.user_prompt))
   }
 
-  const handleExecute = async () => {
+  const handleExecute = async (e: React.MouseEvent) => {
+    e.stopPropagation()
     if (onExecute) {
       await onExecute(step.id)
     }
@@ -196,8 +372,12 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
     setEditName(step.step_name)
     setEditPrompt(step.user_prompt)
     setEditTableName(step.output_table_name || '')
+    // Use stored transformation_config if available, otherwise parse from user_prompt (fallback for legacy data)
+    const config = normalizeConfig(step.transformation_config || parseTransformationConfig(step.user_prompt), step.user_prompt)
+    setEditConfig(config)
     console.log('DEBUG: Set editTableName to:', step.output_table_name || '')
-  }, [step.step_name, step.user_prompt, step.output_table_name])
+    console.log('DEBUG: Set editConfig from transformation_config:', step.transformation_config)
+  }, [step.step_name, step.user_prompt, step.output_table_name, step.transformation_config])
 
   // Initialize modal positions to center of screen
   useEffect(() => {
@@ -373,7 +553,9 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
         <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-100">
           <div className="flex items-center gap-1">
             <button
-              onClick={() => {
+              onClick={(e) => {
+                e.stopPropagation()
+                alert('Edit button clicked!')
                 console.log('DEBUG: Edit button clicked, setting values:', {
                   step_name: step.step_name,
                   user_prompt: step.user_prompt,  
@@ -382,7 +564,16 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
                 setEditName(step.step_name)
                 setEditPrompt(step.user_prompt)
                 setEditTableName(step.output_table_name || '')
+                // Use stored transformation_config if available, otherwise parse from user_prompt (fallback for legacy data)
+                const config = normalizeConfig(step.transformation_config || parseTransformationConfig(step.user_prompt), step.user_prompt)
+                console.log('DEBUG: Edit button clicked - transformation_config:', step.transformation_config)
+                console.log('DEBUG: Edit button clicked - final config:', config)
+                console.log('DEBUG: Edit button clicked - available columns:', availableColumns)
+                setEditConfig(config)
+                setIsAdvancedMode(false)
+                console.log('DEBUG: About to set showEditModal to true')
                 setShowEditModal(true)
+                console.log('DEBUG: showEditModal should now be true')
               }}
               className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
               title="Edit step"
@@ -391,7 +582,12 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
             </button>
             {onViewData && (
               <button
-                onClick={step.status === 'completed' && !step.error_message ? () => onViewData(step.id, step.step_name, step.status) : undefined}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (step.status === 'completed' && !step.error_message) {
+                    onViewData(step.id, step.step_name, step.status)
+                  }
+                }}
                 className={`p-2 rounded transition-colors ${
                   step.status === 'completed' && !step.error_message
                     ? 'text-blue-500 hover:text-blue-700 hover:bg-blue-50' 
@@ -411,7 +607,10 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
             )}
             {onDelete && (
               <button
-                onClick={() => onDelete(step.id)}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onDelete(step.id)
+                }}
                 className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
                 title="Delete step"
               >
@@ -517,11 +716,13 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
       {showEditModal && createPortal(
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div 
-            className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 absolute"
+            className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 absolute"
             style={{
               left: editModalPosition.x,
               top: editModalPosition.y,
-              width: '400px',
+              width: '600px',
+              maxHeight: '80vh',
+              overflow: 'auto',
               cursor: isEditModalDragging ? 'grabbing' : 'default'
             }}
           >
@@ -555,17 +756,194 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
                 />
               </div>
               
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Transformation Description
-                </label>
-                <textarea
-                  value={editPrompt}
-                  onChange={(e) => setEditPrompt(e.target.value)}
-                  rows={4}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                />
+              {/* Mode Toggle */}
+              <div className="flex items-center justify-between bg-gray-50 p-3 rounded-lg">
+                <span className="text-sm font-medium text-gray-700">
+                  {isAdvancedMode ? 'Advanced Mode' : 'Guided Mode'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAdvancedMode(!isAdvancedMode)
+                    if (!isAdvancedMode) {
+                      // Switching to advanced - update text with current config
+                      setEditPrompt(generatePromptFromConfig(editConfig))
+                    }
+                  }}
+                  className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+                >
+                  {isAdvancedMode ? 'Switch to Guided' : 'Switch to Advanced'}
+                </button>
               </div>
+              
+              {isAdvancedMode ? (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Transformation Description
+                  </label>
+                  <textarea
+                    value={editPrompt}
+                    onChange={(e) => setEditPrompt(e.target.value)}
+                    rows={4}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                  />
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Transformation Type */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Transformation Type
+                    </label>
+                    <select
+                      value={editConfig.transformationType}
+                      onChange={(e) => setEditConfig({...editConfig, transformationType: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                    >
+                      <option value="grouped-summarization">Grouped Summarization</option>
+                      <option value="theme-extraction">Theme Extraction</option>
+                      <option value="custom">Custom Transformation</option>
+                    </select>
+                  </div>
+                  
+                  {editConfig.transformationType === 'grouped-summarization' && (
+                    <>
+                      {/* Group By Columns */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Group By Column
+                        </label>
+                        {/* DEBUG INFO */}
+                        {console.log('DEBUG: Rendering group column dropdown - editConfig.groupColumns:', editConfig.groupColumns)}
+                        {console.log('DEBUG: Rendering group column dropdown - selected value:', editConfig.groupColumns[0] || '')}
+                        {console.log('DEBUG: Rendering group column dropdown - availableColumns:', availableColumns)}
+                        {console.log('DEBUG: Rendering group column dropdown - is selected value in available?', availableColumns.includes(editConfig.groupColumns[0] || ''))}
+                        <select
+                          value={editConfig.groupColumns[0] || ''}
+                          onChange={(e) => {
+                            console.log('DEBUG: Group column selection changed to:', e.target.value)
+                            setEditConfig({...editConfig, groupColumns: e.target.value ? [e.target.value] : []})
+                          }}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                        >
+                          <option value="">Select a column to group by</option>
+                          {availableColumns.map(col => (
+                            <option key={col} value={col}>{col}</option>
+                          ))}
+                        </select>
+                      </div>
+                      
+                      {/* Qualitative Columns */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Qualitative Analysis Column
+                        </label>
+                        <select
+                          value={editConfig.qualitativeColumns[0] || ''}
+                          onChange={(e) => setEditConfig({...editConfig, qualitativeColumns: e.target.value ? [e.target.value] : []})}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                        >
+                          <option value="">Select a column for qualitative analysis</option>
+                          {availableColumns.map(col => (
+                            <option key={col} value={col}>{col}</option>
+                          ))}
+                        </select>
+                      </div>
+                      
+                      {/* Sentiment Analysis */}
+                      <div className="flex items-center">
+                        <input
+                          type="checkbox"
+                          id="sentiment"
+                          checked={editConfig.includeSentiment || false}
+                          onChange={(e) => setEditConfig({...editConfig, includeSentiment: e.target.checked})}
+                          className="mr-2 h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded"
+                        />
+                        <label htmlFor="sentiment" className="text-sm font-medium text-gray-700">
+                          Include Sentiment Analysis
+                        </label>
+                      </div>
+                    </>
+                  )}
+                  
+                  {editConfig.transformationType === 'theme-extraction' && (
+                    <>
+                      {/* Text Column for Theme Extraction */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Text Column for Theme Extraction
+                        </label>
+                        <select
+                          value={editConfig.qualitativeColumns[0] || ''}
+                          onChange={(e) => setEditConfig({...editConfig, qualitativeColumns: e.target.value ? [e.target.value] : []})}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                        >
+                          <option value="">Select a text column to extract themes from</option>
+                          {availableColumns.map(col => (
+                            <option key={col} value={col}>{col}</option>
+                          ))}
+                        </select>
+                      </div>
+                      
+                      {/* Manual Themes Input */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Expected Themes (Optional)
+                        </label>
+                        <textarea
+                          value={(editConfig.manualThemes || []).join(', ')}
+                          onChange={(e) => {
+                            const themes = e.target.value.split(',').map(t => t.trim()).filter(t => t.length > 0)
+                            setEditConfig({...editConfig, manualThemes: themes})
+                          }}
+                          rows={3}
+                          placeholder="Customer Service, Product Quality, Shipping, Pricing..."
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">
+                          <strong>Optional:</strong> Enter expected themes separated by commas (e.g., "Customer Service, Product Quality"). 
+                          <br />
+                          • <strong>With themes:</strong> Text will be classified into your themes or "Others"
+                          <br />
+                          • <strong>Without themes:</strong> AI will auto-discover themes from your data
+                        </p>
+                      </div>
+                      
+                      {/* Preview of expected output */}
+                      <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg">
+                        <div className="text-xs font-medium text-amber-700 mb-1">Output Preview:</div>
+                        <div className="text-sm text-amber-600">
+                          📊 <strong>For Bar Charts:</strong> Theme counts (e.g., Customer Service: 45, Product Quality: 32, Others: 8)<br/>
+                          🃏 <strong>For Qualitative Cards:</strong> Individual texts grouped by identified theme
+                        </div>
+                      </div>
+                    </>
+                  )}
+                  
+                  {editConfig.transformationType === 'custom' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Custom Transformation Description
+                      </label>
+                      <textarea
+                        value={editConfig.customPrompt || ''}
+                        onChange={(e) => setEditConfig({...editConfig, customPrompt: e.target.value})}
+                        rows={3}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                        placeholder="Describe what you want to do with the data..."
+                      />
+                    </div>
+                  )}
+                  
+                  {/* Preview */}
+                  <div className="bg-blue-50 border border-blue-200 p-3 rounded-lg">
+                    <div className="text-xs font-medium text-blue-700 mb-1">Generated Prompt:</div>
+                    <div className="text-sm text-blue-600 italic">
+                      "{generatePromptFromConfig(editConfig)}"
+                    </div>
+                  </div>
+                </div>
+              )}
               
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -586,7 +964,18 @@ export default function TransformationNode({ data }: NodeProps<TransformationDat
             
             <div className="flex justify-end gap-2 p-4 border-t border-gray-200">
               <button
-                onClick={() => setShowEditModal(false)}
+                onClick={() => {
+                  // Reset to original values on cancel
+                  setEditName(step.step_name)
+                  setEditPrompt(step.user_prompt)
+                  setEditTableName(step.output_table_name || '')
+                  // Use stored transformation_config if available, otherwise parse from user_prompt (fallback for legacy data)
+                  const config = normalizeConfig(step.transformation_config || parseTransformationConfig(step.user_prompt), step.user_prompt)
+                  console.log('DEBUG: Cancel - transformation_config:', step.transformation_config)
+                  console.log('DEBUG: Cancel - final config:', config)
+                  setEditConfig(config)
+                  setShowEditModal(false)
+                }}
                 className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg font-medium transition-colors"
               >
                 Cancel

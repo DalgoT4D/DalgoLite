@@ -103,7 +103,8 @@ export default function JoinNode({ data, selected }: JoinNodeProps) {
     setShowEditModal(false)
   }
 
-  const handleExecute = async () => {
+  const handleExecute = async (e: React.MouseEvent) => {
+    e.stopPropagation()
     if (!onExecute || isExecuting) return
     
     setIsExecuting(true)
@@ -225,7 +226,10 @@ export default function JoinNode({ data, selected }: JoinNodeProps) {
         <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-100">
           <div className="flex items-center gap-1">
             <button
-              onClick={() => setShowEditModal(true)}
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowEditModal(true)
+              }}
               className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition-colors"
               title="Edit join"
             >
@@ -233,7 +237,12 @@ export default function JoinNode({ data, selected }: JoinNodeProps) {
             </button>
             {onViewData && (
               <button
-                onClick={join.status === 'completed' && !join.errorMessage ? () => onViewData(join.id, join.name) : undefined}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (join.status === 'completed' && !join.errorMessage) {
+                    onViewData(join.id, join.name)
+                  }
+                }}
                 className={`p-2 rounded transition-colors ${
                   join.status === 'completed' && !join.errorMessage
                     ? 'text-blue-500 hover:text-blue-700 hover:bg-blue-50' 
@@ -253,7 +262,10 @@ export default function JoinNode({ data, selected }: JoinNodeProps) {
             )}
             {onDelete && (
               <button
-                onClick={() => onDelete(join.id)}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onDelete(join.id)
+                }}
                 className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
                 title="Delete join"
               >

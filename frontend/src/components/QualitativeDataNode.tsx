@@ -96,7 +96,8 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
     }
   }
 
-  const handleExecute = async () => {
+  const handleExecute = async (e: React.MouseEvent) => {
+    e.stopPropagation()
     if (!onExecute || isExecuting) return
     
     setIsExecuting(true)
@@ -197,7 +198,7 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
                     <div><strong>Records Processed:</strong> {operation.total_records_processed.toLocaleString()}</div>
                   )}
                   {operation.batch_count && (
-                    <div><strong>Batches:</strong> {operation.batch_count} (100 per batch)</div>
+                    <div><strong>Batches:</strong> {operation.batch_count} batches processed</div>
                   )}
                   {operation.execution_time_ms && (
                     <div><strong>Processing Time:</strong> {(operation.execution_time_ms / 1000).toFixed(1)}s</div>
@@ -242,7 +243,13 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
           <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-100">
             <div className="flex items-center gap-1">
               <button
-                onClick={() => onEdit && operation.status !== 'running' && onEdit(operation.id)}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  console.log('Edit button clicked - onEdit exists:', !!onEdit, 'status:', operation.status, 'operationId:', operation.id)
+                  if (onEdit && operation.status !== 'running') {
+                    onEdit(operation.id)
+                  }
+                }}
                 className={`p-2 rounded transition-colors ${
                   operation.status === 'running'
                     ? 'text-gray-400 cursor-not-allowed'
@@ -259,7 +266,12 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
               </button>
               {onViewData && (
                 <button
-                  onClick={operation.status === 'completed' && !operation.error_message ? () => onViewData(operation.id, operation.name) : undefined}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (operation.status === 'completed' && !operation.error_message) {
+                      onViewData(operation.id, operation.name)
+                    }
+                  }}
                   className={`p-2 rounded transition-colors ${
                     operation.status === 'completed' && !operation.error_message
                       ? 'text-blue-500 hover:text-blue-700 hover:bg-blue-50' 
@@ -279,7 +291,10 @@ export default function QualitativeDataNode({ data, selected }: QualitativeDataN
               )}
               {onDelete && (
                 <button
-                  onClick={() => onDelete(operation.id)}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDelete(operation.id)
+                  }}
                   className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
                   title="Delete qualitative operation"
                 >

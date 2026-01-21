@@ -12,11 +12,12 @@ interface QualitativeDataModalProps {
     source_table_id: number
     source_table_type: 'sheet' | 'transformation' | 'join' | 'qualitative'
     qualitative_column: string
-    analysis_type: 'sentiment' | 'summarization'
+    analysis_type: 'sentiment' | 'summarization' | 'theme-extraction'
     aggregation_column?: string
     summarize_sentiment_analysis?: boolean
     sentiment_column?: string
     output_table_name?: string
+    expected_themes?: string
   }) => Promise<void>
   position: { x: number; y: number }
   availableTables: Array<{
@@ -36,6 +37,7 @@ interface QualitativeDataModalProps {
     summarize_sentiment_analysis?: boolean
     sentiment_column?: string
     output_table_name?: string
+    expected_themes?: string
   }
 }
 
@@ -51,14 +53,15 @@ export default function QualitativeDataModal({
   const [sourceTableId, setSourceTableId] = useState<number | null>(initialOperation?.source_table_id || null)
   const [sourceTableType, setSourceTableType] = useState<'sheet' | 'transformation' | 'join' | 'qualitative' | ''>('')
   const [qualitativeColumn, setQualitativeColumn] = useState(initialOperation?.qualitative_column || '')
-  const [analysisType, setAnalysisType] = useState<'sentiment' | 'summarization' | ''>(
-    (initialOperation?.analysis_type as 'sentiment' | 'summarization') || ''
+  const [analysisType, setAnalysisType] = useState<'sentiment' | 'summarization' | 'theme-extraction' | ''>(
+    (initialOperation?.analysis_type as 'sentiment' | 'summarization' | 'theme-extraction') || ''
   )
   const [availableColumns, setAvailableColumns] = useState<string[]>([])
   const [aggregationColumn, setAggregationColumn] = useState(initialOperation?.aggregation_column || '')
   const [summarizeSentimentAnalysis, setSummarizeSentimentAnalysis] = useState(initialOperation?.summarize_sentiment_analysis || false)
   const [sentimentColumn, setSentimentColumn] = useState(initialOperation?.sentiment_column || '')
   const [outputTableName, setOutputTableName] = useState(initialOperation?.output_table_name || '')
+  const [expectedThemes, setExpectedThemes] = useState(initialOperation?.expected_themes || '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -77,11 +80,12 @@ export default function QualitativeDataModal({
       setSourceTableId(initialOperation.source_table_id)
       setSourceTableType(initialOperation.source_table_type as 'sheet' | 'transformation' | 'join' | 'qualitative')
       setQualitativeColumn(initialOperation.qualitative_column)
-      setAnalysisType(initialOperation.analysis_type as 'sentiment' | 'summarization')
+      setAnalysisType(initialOperation.analysis_type as 'sentiment' | 'summarization' | 'theme-extraction')
       setAggregationColumn(initialOperation.aggregation_column || '')
       setSummarizeSentimentAnalysis(initialOperation.summarize_sentiment_analysis || false)
       setSentimentColumn(initialOperation.sentiment_column || '')
       setOutputTableName(initialOperation.output_table_name || '')
+      setExpectedThemes(initialOperation.expected_themes || '')
       
       // Fetch columns for the initial operation's source table
       if (initialOperation.source_table_id && initialOperation.source_table_type) {
@@ -226,6 +230,7 @@ export default function QualitativeDataModal({
         summarize_sentiment_analysis: summarizeSentimentAnalysis,
         sentiment_column: sentimentColumn.trim() || undefined,
         output_table_name: outputTableName.trim() || undefined,
+        expected_themes: expectedThemes.trim() || undefined,
       }
       console.log('DEBUG: Creating qualitative operation with config:', operationConfig)
       console.log('DEBUG: Analysis type:', analysisType)
@@ -241,6 +246,7 @@ export default function QualitativeDataModal({
       setSummarizeSentimentAnalysis(false)
       setSentimentColumn('')
       setOutputTableName('')
+      setExpectedThemes('')
       onClose()
     } catch (err: any) {
       setError(err.message || 'Failed to create qualitative data operation')
@@ -362,7 +368,7 @@ export default function QualitativeDataModal({
             </label>
             <select
               value={analysisType}
-              onChange={(e) => setAnalysisType(e.target.value as 'sentiment' | 'summarization')}
+              onChange={(e) => setAnalysisType(e.target.value as 'sentiment' | 'summarization' | 'theme-extraction')}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               required
             >
@@ -372,6 +378,9 @@ export default function QualitativeDataModal({
               </option>
               <option value="summarization">
                 Summarization - Generate summary and insights
+              </option>
+              <option value="theme-extraction">
+                Theme Extraction - Classify text into themes
               </option>
             </select>
           </div>
@@ -414,61 +423,29 @@ export default function QualitativeDataModal({
             </div>
           )}
 
-
-          {/* Sentiment Analysis Options - Only show for summarization */}
-          {/* COMMENTED OUT: Remove sentiment analysis option from UI while keeping backend functionality 
-          {analysisType === 'summarization' && (
-            <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
-              <div className="flex items-center gap-3 mb-3">
-                <input
-                  type="checkbox"
-                  id="summarizeSentimentAnalysis"
-                  checked={summarizeSentimentAnalysis}
-                  onChange={(e) => setSummarizeSentimentAnalysis(e.target.checked)}
-                  className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                />
-                <label htmlFor="summarizeSentimentAnalysis" className="text-sm font-medium text-gray-700 flex items-center gap-2">
-                  Summarize sentiment analysis
-                  <div className="group relative">
-                    <Info size={14} className="text-gray-400 cursor-help" />
-                    <div className="absolute left-0 bottom-6 hidden group-hover:block bg-gray-800 text-white text-xs rounded-lg px-3 py-2 w-64 z-10">
-                      <div className="mb-1 font-medium">Include Sentiment Statistics:</div>
-                      <div>• Calculate positive/negative review counts and percentages</div>
-                      <div>• Add these stats to your summary alongside the text analysis</div>
-                      <div className="absolute top-full left-4 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-800"></div>
-                    </div>
-                  </div>
-                </label>
-              </div>
-              
-              {summarizeSentimentAnalysis && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Sentiment Column *
-                  </label>
-                  <select
-                    value={sentimentColumn}
-                    onChange={(e) => setSentimentColumn(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    disabled={!sourceTableId}
-                  >
-                    <option value="">
-                      {sourceTableId ? 'Select sentiment analysis column...' : 'First select a source table'}
-                    </option>
-                    {availableColumns.map(column => (
-                      <option key={column} value={column}>
-                        {column}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-sm text-gray-600 mt-1">
-                    Select the column containing sentiment analysis results (positive/negative)
-                  </p>
-                </div>
-              )}
+          {/* Expected Themes - Only show for theme extraction */}
+          {analysisType === 'theme-extraction' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Expected Themes (Optional)
+              </label>
+              <textarea
+                value={expectedThemes}
+                onChange={(e) => setExpectedThemes(e.target.value)}
+                rows={3}
+                placeholder="Customer Service, Product Quality, Shipping, Pricing..."
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-sm text-gray-500 mt-1">
+                <strong>Optional:</strong> Enter expected themes separated by commas (e.g., "Customer Service, Product Quality"). 
+                <br />
+                • <strong>With themes:</strong> Text will be classified into your themes or "Others"
+                <br />
+                • <strong>Without themes:</strong> AI will auto-discover themes from your data
+              </p>
             </div>
           )}
-          */}
+
 
           {/* Analysis Type Description */}
           {analysisType && (
@@ -481,6 +458,19 @@ export default function QualitativeDataModal({
                       <li><code>sentiment_label</code> - Positive, Negative, or Neutral</li>
                       <li><code>sentiment_confidence</code> - Confidence score (0.0 to 1.0)</li>
                     </ul>
+                  </>
+                ) : analysisType === 'theme-extraction' ? (
+                  <>
+                    <strong>Theme Extraction:</strong> This will create a new table with:
+                    <ul className="list-disc list-inside mt-1 ml-2">
+                      <li><code>original_text</code> - The original text being analyzed</li>
+                      <li><code>identified_theme</code> - The classified theme name</li>
+                      <li><code>confidence_score</code> - Classification confidence (0.0 to 1.0)</li>
+                      <li><code>row_id</code> - Original row identifier for tracking</li>
+                    </ul>
+                    <div className="mt-2 text-amber-700 bg-amber-100 px-2 py-1 rounded text-xs">
+                      📊 Perfect for bar charts (theme counts) and qualitative cards (grouped by theme)
+                    </div>
                   </>
                 ) : (
                   <>

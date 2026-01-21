@@ -68,6 +68,7 @@ interface TransformCanvasProps {
     id: number
     step_name: string
     user_prompt: string
+    transformation_config?: any  // Structured configuration
     generated_code?: string
     code_summary: string
     code_explanation?: string
@@ -109,6 +110,8 @@ interface TransformCanvasProps {
   onTransformationCreated?: () => Promise<void>
   onJoinCreated?: () => Promise<void>
   onQualitativeDataCreated?: () => Promise<void>
+  onJoinDeleted?: () => Promise<void>
+  onQualitativeDataDeleted?: () => Promise<void>
 }
 
 export default function TransformCanvas({
@@ -125,6 +128,8 @@ export default function TransformCanvas({
   onTransformationCreated,
   onJoinCreated,
   onQualitativeDataCreated,
+  onJoinDeleted,
+  onQualitativeDataDeleted,
 }: TransformCanvasProps) {
   const [nodes, setNodes, onNodesChangeOriginal] = useNodesState([])
   const [edges, setEdges, onEdgesChangeOriginal] = useEdgesState([])
@@ -338,12 +343,55 @@ export default function TransformCanvas({
         const savedNode = savedLayout?.nodes?.find((n: any) => n.id === `step-${step.id}`)
         const position = savedNode?.position || step.canvas_position || { x: 400, y: 200 }
         
+        // Get available columns for this step from its input sources
+        const getAvailableColumnsForStep = (step: any) => {
+          const columns = new Set<string>()
+          
+          // Add columns from input sheets
+          if (step.upstream_sheet_ids) {
+            step.upstream_sheet_ids.forEach((sheetId: number) => {
+              const sheet = sheets.find(s => s.id === sheetId)
+              if (sheet?.columns) {
+                sheet.columns.forEach((col: string) => columns.add(col))
+              }
+            })
+          }
+          
+          // Add columns from upstream transformations
+          if (step.upstream_step_ids) {
+            step.upstream_step_ids.forEach((stepId: number) => {
+              const upstreamStep = transformationSteps.find(s => s.id === stepId)
+              if (upstreamStep?.output_columns) {
+                upstreamStep.output_columns.forEach((col: string) => columns.add(col))
+              }
+            })
+          }
+          
+          // Add columns from input_columns if available (fallback)
+          if (step.input_columns) {
+            step.input_columns.forEach((col: string) => columns.add(col))
+          }
+          
+          // Final fallback: if no columns found, add all available columns from all sheets
+          // This helps with legacy data or cases where upstream dependencies aren't properly tracked
+          if (columns.size === 0) {
+            sheets.forEach(sheet => {
+              if (sheet.columns) {
+                sheet.columns.forEach((col: string) => columns.add(col))
+              }
+            })
+          }
+          
+          return Array.from(columns).sort()
+        }
+        
         const nodeConfig: any = {
           id: `step-${step.id}`,
           type: 'transformationNode',
           position,
           data: {
             step,
+            availableColumns: getAvailableColumnsForStep(step),
             onUpdate: (stepId: number, updates: any) => onUpdateTransformationStep(stepId, updates),
             onExecute: (stepId: number) => onExecuteStep(stepId),
             onViewData: handleViewTransformationData,
@@ -472,7 +520,9 @@ export default function TransformCanvas({
                       
                       if (deleteResponse.ok) {
                         setNodes(nodes => nodes.filter(node => node.id !== `join-${joinId}`))
-                        setJoins(joins => joins.filter(join => join.id !== joinId))
+                        if (onJoinDeleted) {
+                          await onJoinDeleted()
+                        }
                         setHasUnsavedChanges(true)
                       } else {
                         alert('Failed to delete join. Please try again.')
@@ -643,7 +693,9 @@ export default function TransformCanvas({
                   
                   if (deleteResponse.ok) {
                     setNodes(nodes => nodes.filter(node => node.id !== `qualitative-${operationId}`))
-                    setQualitativeDataOperations(operations => operations.filter(op => op.id !== operationId))
+                    if (onQualitativeDataDeleted) {
+                      await onQualitativeDataDeleted()
+                    }
                     setHasUnsavedChanges(true)
                   } else {
                     alert('Failed to delete qualitative analysis. Please try again.')
@@ -1354,7 +1406,9 @@ export default function TransformCanvas({
                 
                 if (deleteResponse.ok) {
                   setNodes(nodes => nodes.filter(node => node.id !== `join-${joinId}`))
-                  setJoins(joins => joins.filter(join => join.id !== joinId))
+                  if (onJoinDeleted) {
+                    await onJoinDeleted()
+                  }
                   setHasUnsavedChanges(true)
                 } else {
                   alert('Failed to delete join. Please try again.')
@@ -1541,6 +1595,7 @@ export default function TransformCanvas({
           aggregation_column: operationConfig.aggregation_column,
           summarize_sentiment_analysis: operationConfig.summarize_sentiment_analysis,
           sentiment_column: operationConfig.sentiment_column,
+          expected_themes: operationConfig.expected_themes,
           canvas_position: qualitativeModalPosition,
           output_table_name: operationConfig.output_table_name
         }),
@@ -1606,7 +1661,9 @@ export default function TransformCanvas({
                 
                 if (deleteResponse.ok) {
                   setNodes(nodes => nodes.filter(node => node.id !== `qualitative-${operationId}`))
-                  setQualitativeDataOperations(operations => operations.filter(op => op.id !== operationId))
+                  if (onQualitativeDataDeleted) {
+                    await onQualitativeDataDeleted()
+                  }
                   setHasUnsavedChanges(true)
                 } else {
                   alert('Failed to delete qualitative analysis. Please try again.')
@@ -1806,6 +1863,7 @@ export default function TransformCanvas({
           aggregation_column: operationConfig.aggregation_column,
           summarize_sentiment_analysis: operationConfig.summarize_sentiment_analysis,
           sentiment_column: operationConfig.sentiment_column,
+          expected_themes: operationConfig.expected_themes,
           output_table_name: operationConfig.output_table_name
         }),
       })

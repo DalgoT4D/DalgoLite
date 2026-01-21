@@ -20,6 +20,7 @@ interface TransformationStep {
   id: number
   step_name: string
   user_prompt: string
+  transformation_config?: any  // Structured configuration
   generated_code: string
   code_summary: string
   code_explanation: string
@@ -263,6 +264,19 @@ export default function ProjectCanvasPage() {
         const stepsData = await stepsResponse.json()
         setTransformationSteps(stepsData.steps)
       }
+
+      // Also refresh joins and qualitative data operations to update available tables list
+      const joinsResponse = await fetch(getApiUrl(`/projects/${projectId}/joins`))
+      if (joinsResponse.ok) {
+        const joinsData = await joinsResponse.json()
+        setJoins(joinsData.joins || [])
+      }
+
+      const qualitativeResponse = await fetch(getApiUrl(`/projects/${projectId}/qualitative-data`))
+      if (qualitativeResponse.ok) {
+        const qualitativeData = await qualitativeResponse.json()
+        setQualitativeDataOperations(qualitativeData.operations || [])
+      }
     } catch (err) {
       console.error('Error deleting transformation step:', err)
       throw err // Re-throw to be handled by the caller
@@ -402,6 +416,8 @@ export default function ProjectCanvasPage() {
             onTransformationCreated={handleTransformationCreated}
             onJoinCreated={handleJoinCreated}
             onQualitativeDataCreated={handleQualitativeDataCreated}
+            onJoinDeleted={handleJoinCreated}
+            onQualitativeDataDeleted={handleQualitativeDataCreated}
           />
         </div>
 
